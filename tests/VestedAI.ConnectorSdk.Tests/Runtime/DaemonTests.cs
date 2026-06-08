@@ -1,4 +1,3 @@
-using System.Reflection;
 using VestedAI.ConnectorSdk.Tests.Fixtures;
 using VestedAI.ConnectorSdk.Runtime;
 using Xunit;
@@ -15,26 +14,16 @@ namespace VestedAI.ConnectorSdk.Tests.Runtime;
 [Collection("integration")]
 public class DaemonTests
 {
+    // Hermetic assembly — only the integration fixture types (avoids BogusToolHandler).
+    private static readonly FakeAssembly IntegrationAssembly = new(
+        typeof(IntegrationTestAgent),
+        typeof(IntegrationEchoTool));
+
     private static ConnectorApp BuildApp()
         => ConnectorHost.CreateBuilder()
-            .ScanAssembly(Assembly.GetExecutingAssembly())
+            .ScanAssembly(IntegrationAssembly)
             .UseInsecureTransport()
             .Build();
-
-    // Helper: run the supervisor, cancel it after the optional post-condition fires.
-    private static async Task<int> RunWithSignalAsync(
-        ConnectorApp app,
-        int port,
-        Func<FakeHubCapture, bool>? waitUntil = null,
-        int timeoutMs = 8_000)
-    {
-        using var signals = new SignalHandler();
-        using var cts = new CancellationTokenSource(timeoutMs);
-        using var reg = cts.Token.Register(() => signals.InternalCancelHook?.Invoke());
-
-        return await Supervisor.RunAsync(app, "tok", "127.0.0.1", port, insecure: true, signals)
-            .ConfigureAwait(false);
-    }
 
     // ---------------------------------------------------------------------------
     // Handshake: Hello + Register sent; RegisterAck accepted → HandshakeCompleted.

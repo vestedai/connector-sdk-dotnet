@@ -20,7 +20,11 @@
     <PackageReference Include="NJsonSchema" Version="11.*" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="Proto/connector_hub.proto" GrpcServices="Client" />
+    <!-- GrpcServices="Both" generates ConnectorHubClient (used by the runtime) AND
+         ConnectorHubBase (the abstract server base class, used by the test project's
+         in-process FakeHub). Generating "Both" from the same proto avoids duplicate
+         type conflicts that would arise from re-compiling the proto in the test project. -->
+    <Protobuf Include="Proto/connector_hub.proto" GrpcServices="Both" />
   </ItemGroup>
   <ItemGroup>
     <!-- Allow the test project to access internal types (Supervisor, Backoff, etc.) -->

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using VestedAI.ConnectorSdk.Tests.Fixtures;
 using VestedAI.ConnectorSdk.Runtime;
@@ -28,11 +27,19 @@ public class IntegrationTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(10);
 
     // ---------------------------------------------------------------------------
-    // Helper: build a ConnectorApp from the test-assembly fixtures.
+    // Helper: build a ConnectorApp from the integration fixture types ONLY.
+    //
+    // We cannot ScanAssembly(GetExecutingAssembly()) because the test assembly also
+    // contains BogusToolHandler (sensitivity = "bogus"), which the scanner rejects.
+    // FakeAssembly provides a hermetic view of only the types we care about.
+
+    private static readonly FakeAssembly IntegrationAssembly = new(
+        typeof(IntegrationTestAgent),
+        typeof(IntegrationEchoTool));
 
     private static ConnectorApp BuildApp()
         => ConnectorHost.CreateBuilder()
-            .ScanAssembly(Assembly.GetExecutingAssembly())
+            .ScanAssembly(IntegrationAssembly)
             .UseInsecureTransport()
             .Build();
 
@@ -209,7 +216,7 @@ public class IntegrationTests
         };
 
         int exitCode;
-        await using var server = await FakeHubServer.StartAsync(script).ConfigureAwait(false);
+        await using var server = await FakeHubServer.StartAsync(script);
 
         using var signals = new SignalHandler();
         using var reg = cts.Token.Register(() => signals.InternalCancelHook?.Invoke());
@@ -221,16 +228,16 @@ public class IntegrationTests
         // Wait for the server to receive the Register (handshake done, GoAway is next).
         var deadline = DateTime.UtcNow.AddSeconds(8);
         while (server.Capture.ReceivedRegister is null && DateTime.UtcNow < deadline)
-            await Task.Delay(20).ConfigureAwait(false);
+            await Task.Delay(20);
 
         Assert.NotNull(server.Capture.ReceivedRegister);
 
         // Give the supervisor a moment to process GoAway then fire the signal
         // so the backoff-wait is interrupted and the supervisor exits 0.
-        await Task.Delay(200).ConfigureAwait(false);
+        await Task.Delay(200);
         signals.InternalCancelHook?.Invoke();
 
-        exitCode = await supervisorTask.ConfigureAwait(false);
+        exitCode = await supervisorTask;
         Assert.Equal(0, exitCode);
     }
 
