@@ -71,4 +71,12 @@ This differs from writing your own LLM client. The connector does not call the L
 
 ## License + Status
 
-MIT. Current release: **v0.1.0** (.NET 8, C# attribute API, POCO + NJsonSchema args). Wire-parity with the PHP / Python / Node SDKs at v0.3. On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
+MIT. Current release: **v0.1.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity). Wire-parity with the PHP / Python / Node SDKs at v0.3. On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
+
+## Other language SDKs
+
+Same wire protocol, same hub — [all four SDKs](../README.md) are at feature parity (including connector-declared tool sensitivity):
+
+- [PHP](../php/README.md) — Packagist `vested-ai/connector-sdk-php`
+- [Python](../python/README.md) — PyPI `vested-connect-sdk`
+- [Node.js](../node/README.md) — npm `@vested-ai/connector-sdk`
