@@ -114,6 +114,22 @@ public class FromToolTypeTests
     }
 
     [Fact]
+    public void Schemas_UseDraft07Dialect_NotDraft04()
+    {
+        // The hub validates declared schemas with opis/json-schema, which does
+        // NOT support draft-04 (NJsonSchema's default). The SDK must emit
+        // draft-07 or the hub rejects registration with schema_invalid.
+        var decl = DeclarationFactory.FromToolType(typeof(EchoTool));
+        foreach (var schema in new[] { decl.InputSchemaJson, decl.OutputSchemaJson! })
+        {
+            using var doc = JsonDocument.Parse(schema);
+            var dialect = doc.RootElement.GetProperty("$schema").GetString();
+            Assert.Equal("http://json-schema.org/draft-07/schema#", dialect);
+            Assert.DoesNotContain("draft-04", schema);
+        }
+    }
+
+    [Fact]
     public void EchoTool_OutputSchema_IsValidJson()
     {
         var decl = DeclarationFactory.FromToolType(typeof(EchoTool));

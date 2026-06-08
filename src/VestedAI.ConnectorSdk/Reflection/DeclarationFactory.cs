@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using NJsonSchema;
 using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Errors;
@@ -78,9 +79,10 @@ public static class DeclarationFactory
                 $"Allowed values: {string.Join(", ", Sensitivity.All)}.");
         }
 
-        // Generate JSON schemas synchronously.
-        var inputSchemaJson  = JsonSchema.FromType(argsType).ToJson();
-        var outputSchemaJson = JsonSchema.FromType(resultType).ToJson();
+        // Generate JSON schemas synchronously, then normalize the $schema
+        // dialect to draft-07.
+        var inputSchemaJson  = NormalizeSchemaDialect(JsonSchema.FromType(argsType).ToJson());
+        var outputSchemaJson = NormalizeSchemaDialect(JsonSchema.FromType(resultType).ToJson());
 
         return new ToolDeclaration
         {
@@ -101,6 +103,27 @@ public static class DeclarationFactory
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// NJsonSchema emits <c>"$schema": "http://json-schema.org/draft-04/schema#"</c>.
+    /// The hub validates declared tool schemas with opis/json-schema, which
+    /// supports drafts 06/07/2019-09/2020-12 but NOT draft-04 — so a draft-04
+    /// document is rejected with a <c>schema_invalid</c> registration issue.
+    /// Rewrite the dialect to draft-07 (what the Node SDK's zod output uses,
+    /// proven compatible) so the document compiles. Keywords NJsonSchema emits
+    /// (<c>type</c>, <c>properties</c>, <c>definitions</c>, <c>$ref</c>,
+    /// <c>required</c>, <c>description</c>) are all valid under draft-07.
+    /// </summary>
+    private static string NormalizeSchemaDialect(string schemaJson)
+    {
+        var node = JsonNode.Parse(schemaJson);
+        if (node is JsonObject obj)
+        {
+            obj["$schema"] = "http://json-schema.org/draft-07/schema#";
+            return obj.ToJsonString();
+        }
+        return schemaJson;
+    }
 
     /// <summary>
     /// Walk the base-type chain of <paramref name="t"/> looking for a closed
