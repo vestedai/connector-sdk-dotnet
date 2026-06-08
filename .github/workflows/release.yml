@@ -23,11 +23,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # amd64-only for now. Grpc.Tools' bundled linux_arm64 protoc segfaults
+        # (exit 139) on native arm64 runners during the in-Docker `dotnet
+        # publish`, which runs protoc for the proto-at-build step. The NuGet
+        # package is architecture-neutral managed IL, so arm64 .NET developers
+        # are unaffected — this only limits the prebuilt Docker convenience
+        # image. A multi-arch image (cross-publish protoc on an amd64 builder
+        # via $BUILDPLATFORM + dotnet publish -a $TARGETARCH) is a follow-up.
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
 
     permissions:
       contents: read
@@ -124,7 +129,10 @@ jobs:
   nuget:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: build
+    # Independent of the Docker build: the NuGet package is the primary,
+    # architecture-neutral artifact and must publish even if the Docker
+    # image build has an arch-specific issue. Runs on amd64 (ubuntu-latest),
+    # where Grpc.Tools' protoc works.
     permissions:
       contents: read
     steps:
