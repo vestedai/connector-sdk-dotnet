@@ -112,7 +112,12 @@ internal sealed class Dispatcher
             RunId:          "",       // run_id not present in ToolCallRequest proto
             ConversationId: req.ConversationId ?? "",
             UserEmail:      req.UserEmail ?? "",
-            UserId:         userId);
+            UserId:         userId)
+        {
+            EmployeeNo                = req.EmployeeNo ?? "",
+            ErpIdentifier             = req.ErpIdentifier ?? "",
+            ErpDepartmentIdentifiers  = req.ErpDepartmentIdentifiers.ToArray(),
+        };
     }
 
     private Task ReplyOkAsync(string invocationId, byte[] resultJson)

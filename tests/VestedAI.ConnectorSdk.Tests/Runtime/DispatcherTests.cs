@@ -272,6 +272,75 @@ public class DispatcherTests
     }
 
     // -----------------------------------------------------------------------
+    // ERP identity fields populated on ToolContext
+
+    [Fact]
+    public async Task ErpIdentityFields_SurfaceOnContext_WhenPresentInRequest()
+    {
+        var dict = new Dictionary<string, ToolDeclaration>(StringComparer.Ordinal);
+        var decl = DeclarationFactory.FromToolType(typeof(EchoContextTool));
+        dict[decl.Key] = decl;
+
+        var capture = new CapturingSend();
+        var dispatcher = new Dispatcher(dict, capture.SendAsync);
+        var req = new ToolCallRequest
+        {
+            ToolKey        = "disp.echo_ctx",
+            InvocationId   = "erp-1",
+            ArgsJson       = ByteString.CopyFrom(Encoding.UTF8.GetBytes("{}")),
+            OrganizationId = "1",
+            UserId         = "0",
+            EmployeeNo     = "EMP-001",
+            ErpIdentifier  = "SAP-XYZ",
+        };
+        req.ErpDepartmentIdentifiers.Add("DEPT-A");
+        req.ErpDepartmentIdentifiers.Add("DEPT-B");
+        dispatcher.Dispatch(req);
+
+        await WaitForMessages(capture, count: 1);
+
+        var resp = capture.Captured.Single().ToolCallResponse;
+        Assert.Equal(ToolCallResponse.ResultOneofCase.ResultJson, resp.ResultCase);
+        using var doc = JsonDocument.Parse(resp.ResultJson.ToStringUtf8());
+        var root = doc.RootElement;
+        Assert.Equal("EMP-001", root.GetProperty("EmployeeNo").GetString());
+        Assert.Equal("SAP-XYZ", root.GetProperty("ErpIdentifier").GetString());
+        var depts = root.GetProperty("ErpDepartmentIdentifiers").EnumerateArray()
+            .Select(e => e.GetString()!).ToArray();
+        Assert.Equal(new[] { "DEPT-A", "DEPT-B" }, depts);
+    }
+
+    [Fact]
+    public async Task ErpIdentityFields_DefaultToEmptyWhenAbsentInRequest()
+    {
+        var dict = new Dictionary<string, ToolDeclaration>(StringComparer.Ordinal);
+        var decl = DeclarationFactory.FromToolType(typeof(EchoContextTool));
+        dict[decl.Key] = decl;
+
+        var capture = new CapturingSend();
+        var dispatcher = new Dispatcher(dict, capture.SendAsync);
+        dispatcher.Dispatch(new ToolCallRequest
+        {
+            ToolKey        = "disp.echo_ctx",
+            InvocationId   = "erp-2",
+            ArgsJson       = ByteString.CopyFrom(Encoding.UTF8.GetBytes("{}")),
+            OrganizationId = "1",
+            UserId         = "0",
+            // EmployeeNo, ErpIdentifier, and ErpDepartmentIdentifiers intentionally omitted.
+        });
+
+        await WaitForMessages(capture, count: 1);
+
+        var resp = capture.Captured.Single().ToolCallResponse;
+        Assert.Equal(ToolCallResponse.ResultOneofCase.ResultJson, resp.ResultCase);
+        using var doc = JsonDocument.Parse(resp.ResultJson.ToStringUtf8());
+        var root = doc.RootElement;
+        Assert.Equal("", root.GetProperty("EmployeeNo").GetString());
+        Assert.Equal("", root.GetProperty("ErpIdentifier").GetString());
+        Assert.Empty(root.GetProperty("ErpDepartmentIdentifiers").EnumerateArray());
+    }
+
+    // -----------------------------------------------------------------------
     // Helper
 
     private static async Task WaitForMessages(CapturingSend capture, int count, int timeoutMs = 3000)
@@ -301,16 +370,22 @@ public class EchoContextTool : ToolHandler<EchoContextTool.Args, EchoContextTool
         public string ConversationId { get; set; } = "";
         public string UserEmail { get; set; } = "";
         public int UserId { get; set; }
+        public string EmployeeNo { get; set; } = "";
+        public string ErpIdentifier { get; set; } = "";
+        public string[] ErpDepartmentIdentifiers { get; set; } = Array.Empty<string>();
     }
 
     public override Task<CtxResult> HandleAsync(Args args, ToolContext ctx)
         => Task.FromResult(new CtxResult
         {
-            OrgId          = ctx.OrgId,
-            AgentKey       = ctx.AgentKey,
-            RunId          = ctx.RunId,
-            ConversationId = ctx.ConversationId,
-            UserEmail      = ctx.UserEmail,
-            UserId         = ctx.UserId,
+            OrgId                    = ctx.OrgId,
+            AgentKey                 = ctx.AgentKey,
+            RunId                    = ctx.RunId,
+            ConversationId           = ctx.ConversationId,
+            UserEmail                = ctx.UserEmail,
+            UserId                   = ctx.UserId,
+            EmployeeNo               = ctx.EmployeeNo,
+            ErpIdentifier            = ctx.ErpIdentifier,
+            ErpDepartmentIdentifiers = ctx.ErpDepartmentIdentifiers.ToArray(),
         });
 }

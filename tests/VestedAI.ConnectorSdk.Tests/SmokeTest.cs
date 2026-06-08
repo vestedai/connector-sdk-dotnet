@@ -9,7 +9,7 @@ public class SmokeTest
     [Fact]
     public void SdkVersion_IsExpected()
     {
-        Assert.Equal("0.1.0", SdkInfo.Version);
+        Assert.Equal("0.2.0", SdkInfo.Version);
     }
 
     [Fact]

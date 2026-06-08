@@ -63,6 +63,26 @@ The following are PHP-, Python-, or Node-specific implementation details. They a
 
 ---
 
+## v0.2.0 Release Notes
+
+### v0.2.0 — ERP Identity on ToolContext (L-5)
+
+**New fields on `ToolContext`** (additive, no breaking changes):
+
+| Field | Type | Default | Source |
+|---|---|---|---|
+| `EmployeeNo` | `string` | `""` | `ToolCallRequest.employee_no` (proto field 10) |
+| `ErpIdentifier` | `string` | `""` | `ToolCallRequest.erp_identifier` (proto field 11) |
+| `ErpDepartmentIdentifiers` | `IReadOnlyList<string>` | `Array.Empty<string>()` | `ToolCallRequest.erp_department_identifiers` (proto field 12) |
+
+These carry the calling user's ERP/HR identity into every tool handler. All three default to empty (string) or empty list (never null) when the hub sends no value, so existing handlers that ignore them need no changes.
+
+The three fields are `init`-only properties rather than positional parameters — C# 12 positional parameters cannot default to collection literals without disabling nullable warnings. Existing code that constructs `ToolContext` positionally or with named parameters continues to compile unchanged; the ERP properties default automatically.
+
+**No breaking changes** within the v0.2.x series.
+
+---
+
 ## v0.1.0 Release Notes
 
 ### v0.1.0 — Initial .NET Release

@@ -207,13 +207,18 @@ Source: `src/VestedAI.ConnectorSdk/Tool/ToolContext.cs`
 Read-only value object passed to every handler.
 
 ```csharp
-public record ToolContext(
+public sealed record ToolContext(
     int    OrgId,
     string AgentKey,
     string RunId,
     string ConversationId,
     string UserEmail = "",
-    int    UserId = 0);
+    int    UserId = 0)
+{
+    public string               EmployeeNo                { get; init; } = "";
+    public string               ErpIdentifier             { get; init; } = "";
+    public IReadOnlyList<string> ErpDepartmentIdentifiers { get; init; } = Array.Empty<string>();
+}
 ```
 
 | Field | Type | Description |
@@ -224,6 +229,11 @@ public record ToolContext(
 | `UserEmail` | string | Caller's email. Empty for system runs. **PII — do not log or persist.** |
 | `ConversationId` | string | Conversation this run belongs to. |
 | `AgentKey` | string | Key of the agent being run. |
+| `EmployeeNo` | string | Caller's ERP employee number. Empty string when unset. Source: proto field 10. |
+| `ErpIdentifier` | string | Caller's primary ERP user identifier (e.g. SAP user ID). Empty string when unset. Source: proto field 11. |
+| `ErpDepartmentIdentifiers` | `IReadOnlyList<string>` | ERP identifiers of every department the caller belongs to. Empty list (never null) when unset. Source: proto field 12 (repeated). |
+
+**Nullable note**: `EmployeeNo` and `ErpIdentifier` are always non-null strings (empty `""` when the hub sends no value). `ErpDepartmentIdentifiers` is always a non-null list (`Array.Empty<string>()` when absent). The three ERP fields are `init`-only properties rather than positional record parameters because C# positional parameters cannot default to collection literals while satisfying `TreatWarningsAsErrors` with nullable reference types enabled.
 
 ---
 
