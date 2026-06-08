@@ -22,4 +22,10 @@
   <ItemGroup>
     <Protobuf Include="Proto/connector_hub.proto" GrpcServices="Client" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Allow the test project to access internal types (Supervisor, Backoff, etc.) -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>VestedAI.ConnectorSdk.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>
