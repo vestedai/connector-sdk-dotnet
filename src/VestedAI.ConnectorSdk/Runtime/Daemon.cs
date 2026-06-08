@@ -144,7 +144,6 @@ internal sealed class Daemon
             {
                 if (_dispatcher is null)
                 {
-                    // TODO(K-4): wire dispatcher
                     Console.Error.WriteLine(
                         $"[vested] toolCallRequest received but no dispatcher configured: " +
                         $"{msg.ToolCallRequest.ToolKey}");

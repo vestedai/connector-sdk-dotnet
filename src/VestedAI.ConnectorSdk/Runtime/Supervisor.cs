@@ -95,7 +95,9 @@ internal static class Supervisor
     }
 
     /// <summary>
-    /// Convenience entry point: creates the GrpcClient and Daemon per session.
+    /// Convenience entry point: creates the GrpcClient, Dispatcher, and Daemon per session.
+    /// The Dispatcher is constructed from <paramref name="app"/>.Tools each session so it
+    /// always reflects the current tool registry.
     /// </summary>
     public static Task<int> RunAsync(
         IConnectorRuntime app,
@@ -103,10 +105,9 @@ internal static class Supervisor
         string host,
         int port,
         bool insecure,
-        SignalHandler signals,
-        Action<Vested.V1.ToolCallRequest>? dispatcher = null)
+        SignalHandler signals)
     {
-        var factory = new DefaultDaemonFactory(app, token, host, port, insecure, dispatcher);
+        var factory = new DefaultDaemonFactory(app, token, host, port, insecure);
         return RunAsync(factory, signals);
     }
 
@@ -120,22 +121,19 @@ internal static class Supervisor
         private readonly string _host;
         private readonly int _port;
         private readonly bool _insecure;
-        private readonly Action<Vested.V1.ToolCallRequest>? _dispatcher;
 
         public DefaultDaemonFactory(
             IConnectorRuntime app,
             string token,
             string host,
             int port,
-            bool insecure,
-            Action<Vested.V1.ToolCallRequest>? dispatcher)
+            bool insecure)
         {
             _app = app;
             _token = token;
             _host = host;
             _port = port;
             _insecure = insecure;
-            _dispatcher = dispatcher;
         }
 
         public async Task<(int ExitCode, bool HandshakeCompleted)> RunSessionAsync(
@@ -146,7 +144,9 @@ internal static class Supervisor
             await using (client.ConfigureAwait(false))
             {
                 client.Connect();
-                var daemon = new Daemon(_app, client, signals, _dispatcher);
+                // Construct a Dispatcher per session; pass client.SendAsync as the send seam.
+                var dispatcher = new Dispatcher(_app.Tools, client.SendAsync);
+                var daemon = new Daemon(_app, client, signals, dispatcher.Dispatch);
                 var exit = await daemon.RunAsync(ct).ConfigureAwait(false);
                 return (exit, daemon.HandshakeCompleted);
             }
