@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using NJsonSchema;
+using NJsonSchema.Generation;
 using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Errors;
 using VestedAI.ConnectorSdk.Tool;
@@ -13,6 +14,29 @@ namespace VestedAI.ConnectorSdk.Reflection;
 /// </summary>
 public static class DeclarationFactory
 {
+    /// <summary>
+    /// Schema-generation settings shared by tool input/output schema building.
+    /// </summary>
+    /// <remarks>
+    /// <c>FlattenInheritanceHierarchy</c> is essential: by default NJsonSchema
+    /// represents class inheritance as
+    /// <c>allOf: [{$ref: base}, {derived props, additionalProperties:false}]</c>
+    /// with the base definition <em>also</em> <c>additionalProperties:false</c>.
+    /// That composition is unsatisfiable — JSON Schema evaluates
+    /// <c>additionalProperties</c> per-subschema, so the derived branch rejects
+    /// every base-level property and the base branch rejects every derived
+    /// property; only <c>{}</c> validates. A connector whose args type subclasses
+    /// a shared base would then have every tool call rejected by the hub with
+    /// "additional properties ... not allowed". Flattening collapses the
+    /// hierarchy into a single object schema where inherited and derived
+    /// properties share one <c>additionalProperties:false</c>.
+    /// </remarks>
+    private static readonly SystemTextJsonSchemaGeneratorSettings SchemaSettings = new()
+    {
+        FlattenInheritanceHierarchy = true,
+    };
+
+
     /// <summary>
     /// Build an <see cref="AgentDeclaration"/> from a class decorated with
     /// <see cref="AgentAttribute"/> and zero-or-more <see cref="InstructionAttribute"/>s.
@@ -81,8 +105,8 @@ public static class DeclarationFactory
 
         // Generate JSON schemas synchronously, then normalize the $schema
         // dialect to draft-07.
-        var inputSchemaJson  = NormalizeSchemaDialect(JsonSchema.FromType(argsType).ToJson());
-        var outputSchemaJson = NormalizeSchemaDialect(JsonSchema.FromType(resultType).ToJson());
+        var inputSchemaJson  = NormalizeSchemaDialect(JsonSchema.FromType(argsType, SchemaSettings).ToJson());
+        var outputSchemaJson = NormalizeSchemaDialect(JsonSchema.FromType(resultType, SchemaSettings).ToJson());
 
         return new ToolDeclaration
         {
