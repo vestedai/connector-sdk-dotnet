@@ -129,24 +129,66 @@ public static class DeclarationFactory
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// NJsonSchema emits <c>"$schema": "http://json-schema.org/draft-04/schema#"</c>.
-    /// The hub validates declared tool schemas with opis/json-schema, which
-    /// supports drafts 06/07/2019-09/2020-12 but NOT draft-04 — so a draft-04
-    /// document is rejected with a <c>schema_invalid</c> registration issue.
-    /// Rewrite the dialect to draft-07 (what the Node SDK's zod output uses,
-    /// proven compatible) so the document compiles. Keywords NJsonSchema emits
-    /// (<c>type</c>, <c>properties</c>, <c>definitions</c>, <c>$ref</c>,
-    /// <c>required</c>, <c>description</c>) are all valid under draft-07.
+    /// Normalize raw NJsonSchema output into a document the hub will accept.
+    /// Two repairs:
+    /// <list type="number">
+    /// <item><b>Dialect.</b> NJsonSchema emits
+    /// <c>"$schema": "http://json-schema.org/draft-04/schema#"</c>. The hub
+    /// validates declared schemas with opis/json-schema (drafts 06/07/2019-09/
+    /// 2020-12, NOT draft-04), so a draft-04 document is rejected with a
+    /// <c>schema_invalid</c> registration issue. Rewrite the dialect to draft-07.</item>
+    /// <item><b>Invalid <c>additionalProperties</c>.</b> Some NJsonSchema 11.x
+    /// versions serialize the "any" schema of an object-valued dictionary
+    /// (<c>Dictionary&lt;string, object&gt;</c>) as <c>"additionalProperties": []</c>
+    /// — an empty array, which is invalid against the metaschema
+    /// (<c>additionalProperties</c> must be a boolean or a schema). The hub's
+    /// strict validator (santhosh-tekuri) then refuses to compile the schema,
+    /// failing every tool call. Repair any array-valued <c>additionalProperties</c>
+    /// to <c>{}</c> (an empty schema = allow any value). The SDK does not trust
+    /// the floating <c>NJsonSchema 11.*</c> dependency to emit valid JSON Schema.</item>
+    /// </list>
     /// </summary>
-    private static string NormalizeSchemaDialect(string schemaJson)
+    internal static string NormalizeSchemaDialect(string schemaJson)
     {
         var node = JsonNode.Parse(schemaJson);
         if (node is JsonObject obj)
         {
             obj["$schema"] = "http://json-schema.org/draft-07/schema#";
+            RepairInvalidSchemaNodes(obj);
             return obj.ToJsonString();
         }
         return schemaJson;
+    }
+
+    /// <summary>
+    /// Recursively repair invalid <c>additionalProperties</c> values that some
+    /// NJsonSchema versions emit as an empty array. <c>additionalProperties</c>
+    /// is never legally an array (boolean or schema only), so any array value is
+    /// rewritten to an empty schema <c>{}</c>.
+    /// </summary>
+    private static void RepairInvalidSchemaNodes(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                if (obj["additionalProperties"] is JsonArray)
+                {
+                    obj["additionalProperties"] = new JsonObject();
+                }
+                // Snapshot values before recursing — nested repairs mutate child
+                // objects, not the collection being enumerated here.
+                foreach (var child in obj.Select(kv => kv.Value).ToList())
+                {
+                    RepairInvalidSchemaNodes(child);
+                }
+                break;
+            case JsonArray arr:
+                foreach (var item in arr.ToList())
+                {
+                    RepairInvalidSchemaNodes(item);
+                }
+                break;
+        }
     }
 
     /// <summary>
