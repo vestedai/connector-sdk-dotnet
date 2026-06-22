@@ -23,6 +23,7 @@ internal sealed class GrpcClient : IAsyncDisposable
 
     private GrpcChannel? _channel;
     private AsyncDuplexStreamingCall<ConnectorMsg, HubMsg>? _call;
+    private WriteSerializer? _writer;
 
     public GrpcClient(string host, int port, string token, bool insecure)
     {
@@ -47,13 +48,17 @@ internal sealed class GrpcClient : IAsyncDisposable
         var stub = new ConnectorHub.ConnectorHubClient(_channel);
         var metadata = new Metadata { { "x-connector-token", _token } };
         _call = stub.Connect(metadata);
+        // Serialize all writes to the single bidi request stream: tool-call
+        // responses (parallel handlers) and heartbeats share this stream, and
+        // gRPC allows only one in-flight WriteAsync at a time.
+        _writer = new WriteSerializer(msg => _call.RequestStream.WriteAsync(msg));
     }
 
-    /// <summary>Sends a ConnectorMsg to the hub.</summary>
+    /// <summary>Sends a ConnectorMsg to the hub. Writes are serialized.</summary>
     public Task SendAsync(ConnectorMsg msg)
     {
-        if (_call is null) throw new ConnectorException("stream not opened");
-        return _call.RequestStream.WriteAsync(msg);
+        if (_writer is null) throw new ConnectorException("stream not opened");
+        return _writer.WriteAsync(msg);
     }
 
     /// <summary>
@@ -90,6 +95,8 @@ internal sealed class GrpcClient : IAsyncDisposable
             try { _call.Dispose(); } catch { /* best effort */ }
             _call = null;
         }
+        _writer?.Dispose();
+        _writer = null;
         if (_channel is not null)
         {
             await _channel.ShutdownAsync().ConfigureAwait(false);
