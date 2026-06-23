@@ -90,6 +90,20 @@ internal sealed class Dispatcher
         // 4. Invoke handler
         try
         {
+            if (decl.IsPaginated)
+            {
+                var cursor = new DatasetCursor
+                {
+                    Token    = string.IsNullOrEmpty(req.Cursor) ? null : req.Cursor,
+                    PageSize = (int)req.PageSize,
+                };
+                var handler = (ToolHandlerBase)Activator.CreateInstance(decl.HandlerType)!;
+                var page    = await handler.InvokePagedBoxedAsync(args, cursor, ctx).ConfigureAwait(false);
+                var bytes   = JsonSerializer.SerializeToUtf8Bytes(new { rows = page.Rows });
+                await ReplyPageAsync(req.InvocationId, bytes, page.NextCursor, page.Total).ConfigureAwait(false);
+                return;
+            }
+
             var result = await decl.InvokeAsync(args, ctx).ConfigureAwait(false);
             var resultBytes = JsonSerializer.SerializeToUtf8Bytes(result, result.GetType());
             await ReplyOkAsync(req.InvocationId, resultBytes).ConfigureAwait(false);
@@ -129,6 +143,22 @@ internal sealed class Dispatcher
                 InvocationId = invocationId,
                 ResultJson    = ByteString.CopyFrom(resultJson),
                 DurationMs    = 0,
+            }
+        };
+        return _send(msg);
+    }
+
+    private Task ReplyPageAsync(string invocationId, byte[] rowsJson, string? nextCursor, long? total)
+    {
+        var msg = new ConnectorMsg
+        {
+            ToolCallResponse = new ToolCallResponse
+            {
+                InvocationId = invocationId,
+                ResultJson   = ByteString.CopyFrom(rowsJson),
+                NextCursor   = nextCursor ?? "",
+                TotalRows    = total.HasValue ? (ulong)total.Value : 0UL,
+                DurationMs   = 0,
             }
         };
         return _send(msg);

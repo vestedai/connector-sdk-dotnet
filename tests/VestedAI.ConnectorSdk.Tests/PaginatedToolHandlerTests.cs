@@ -135,4 +135,19 @@ public class PaginatedToolHandlerTests
         var proto = Daemon.ToProto(decl);
         Assert.Equal(Vested.V1.ResultKind.Single, proto.ResultKind);
     }
+
+    [Fact]
+    public async Task Dispatch_PaginatedTool_RepliesRowsCursorTotal()
+    {
+        Vested.V1.ToolCallResponse? sent = null;
+        var tcs = new TaskCompletionSource();
+        var tools = new Dictionary<string, ToolDeclaration> { ["t.rows"] = DeclarationFactory.FromToolType(typeof(RowsTool)) };
+        var d = new Dispatcher(tools, msg => { sent = msg.ToolCallResponse; tcs.SetResult(); return Task.CompletedTask; });
+        d.Dispatch(new Vested.V1.ToolCallRequest { InvocationId = "i1", ToolKey = "t.rows", ArgsJson = Google.Protobuf.ByteString.CopyFromUtf8("{\"Q\":\"x\"}"), Cursor = "", PageSize = 10 });
+        await tcs.Task;
+        Assert.Equal("10", sent!.NextCursor);
+        Assert.Equal(25UL, sent.TotalRows);
+        using var doc = System.Text.Json.JsonDocument.Parse(sent.ResultJson.ToStringUtf8());
+        Assert.Equal(10, doc.RootElement.GetProperty("rows").GetArrayLength());
+    }
 }
