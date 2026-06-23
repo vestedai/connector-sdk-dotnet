@@ -1,6 +1,7 @@
 using Google.Protobuf;
 using Vested.V1;
 using VestedAI.ConnectorSdk.Errors;
+using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk.Runtime;
 
@@ -221,19 +222,7 @@ internal sealed class Daemon
             {
                 if (!toolKey.StartsWith(nsPrefix, StringComparison.Ordinal)) continue;
 
-                a.Tools.Add(new ToolDecl
-                {
-                    Key              = toolDecl.Key,
-                    Name             = toolDecl.Name,
-                    Description      = toolDecl.Description,
-                    InputSchemaJson  = ByteString.CopyFromUtf8(toolDecl.InputSchemaJson),
-                    OutputSchemaJson = toolDecl.OutputSchemaJson is not null
-                        ? ByteString.CopyFromUtf8(toolDecl.OutputSchemaJson)
-                        : ByteString.Empty,
-                    DefaultDeadlineMs = (uint)toolDecl.DefaultDeadlineMs,
-                    MaxResultBytes    = (uint)toolDecl.MaxResultBytes,
-                    Sensitivity       = toolDecl.Sensitivity,
-                });
+                a.Tools.Add(ToProto(toolDecl));
             }
 
             reg.Agents.Add(a);
@@ -241,4 +230,20 @@ internal sealed class Daemon
 
         return new ConnectorMsg { Register = reg };
     }
+
+    /// <summary>Maps a <see cref="ToolDeclaration"/> to its proto <see cref="ToolDecl"/> representation.</summary>
+    internal static ToolDecl ToProto(ToolDeclaration d) => new ToolDecl
+    {
+        Key               = d.Key,
+        Name              = d.Name,
+        Description       = d.Description,
+        InputSchemaJson   = ByteString.CopyFromUtf8(d.InputSchemaJson),
+        OutputSchemaJson  = d.OutputSchemaJson is not null
+            ? ByteString.CopyFromUtf8(d.OutputSchemaJson)
+            : ByteString.Empty,
+        DefaultDeadlineMs = (uint)d.DefaultDeadlineMs,
+        MaxResultBytes    = (uint)d.MaxResultBytes,
+        Sensitivity       = d.Sensitivity,
+        ResultKind        = d.IsPaginated ? Vested.V1.ResultKind.Rowset : Vested.V1.ResultKind.Single,
+    };
 }

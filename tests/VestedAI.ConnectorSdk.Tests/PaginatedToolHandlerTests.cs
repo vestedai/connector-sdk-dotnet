@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using VestedAI.ConnectorSdk.Reflection;
+using VestedAI.ConnectorSdk.Runtime;
 using VestedAI.ConnectorSdk.Tool;
 using Xunit;
 
@@ -116,5 +118,21 @@ public class PaginatedToolHandlerTests
         Assert.Same(rows, bp.Rows);
         Assert.Equal("n", bp.NextCursor);
         Assert.Equal(50, bp.Total);
+    }
+
+    [Fact]
+    public void ToProto_PaginatedTool_SetsRowsetResultKind()
+    {
+        var decl = DeclarationFactory.FromToolType(typeof(RowsTool));
+        var proto = Daemon.ToProto(decl);
+        Assert.Equal(Vested.V1.ResultKind.Rowset, proto.ResultKind);
+    }
+
+    [Fact]
+    public void ToProto_SingleTool_SetsSingleResultKind()
+    {
+        var decl = DeclarationFactory.FromToolType(typeof(SingleEchoTool));
+        var proto = Daemon.ToProto(decl);
+        Assert.Equal(Vested.V1.ResultKind.Single, proto.ResultKind);
     }
 }
