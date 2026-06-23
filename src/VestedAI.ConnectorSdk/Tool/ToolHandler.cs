@@ -18,6 +18,15 @@ public abstract class ToolHandlerBase
     /// already deserialized the args to the correct POCO type.
     /// </summary>
     public abstract Task<object> InvokeBoxedAsync(object args, ToolContext ctx);
+
+    /// <summary>
+    /// Invoke the handler in paginated mode, returning a type-erased <see cref="BoxedPage"/>.
+    /// Single-tool handlers (<see cref="ToolHandler{TArgs,TResult}"/>) throw
+    /// <see cref="NotSupportedException"/> from this default implementation.
+    /// <see cref="PaginatedToolHandler{TArgs,TRow}"/> overrides this method.
+    /// </summary>
+    public virtual Task<BoxedPage> InvokePagedBoxedAsync(object args, DatasetCursor cursor, ToolContext ctx)
+        => throw new NotSupportedException("Tool is not paginated.");
 }
 
 /// <summary>
