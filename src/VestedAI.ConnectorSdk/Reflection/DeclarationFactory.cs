@@ -137,15 +137,21 @@ public static class DeclarationFactory
     /// validates declared schemas with opis/json-schema (drafts 06/07/2019-09/
     /// 2020-12, NOT draft-04), so a draft-04 document is rejected with a
     /// <c>schema_invalid</c> registration issue. Rewrite the dialect to draft-07.</item>
-    /// <item><b>Invalid <c>additionalProperties</c>.</b> Some NJsonSchema 11.x
-    /// versions serialize the "any" schema of an object-valued dictionary
-    /// (<c>Dictionary&lt;string, object&gt;</c>) as <c>"additionalProperties": []</c>
-    /// — an empty array, which is invalid against the metaschema
-    /// (<c>additionalProperties</c> must be a boolean or a schema). The hub's
-    /// strict validator (santhosh-tekuri) then refuses to compile the schema,
-    /// failing every tool call. Repair any array-valued <c>additionalProperties</c>
-    /// to <c>{}</c> (an empty schema = allow any value). The SDK does not trust
-    /// the floating <c>NJsonSchema 11.*</c> dependency to emit valid JSON Schema.</item>
+    /// <item><b>"Allow any" <c>additionalProperties</c>.</b> The "any" schema of
+    /// an object-valued dictionary (<c>Dictionary&lt;string, object&gt;</c>) is
+    /// emitted by NJsonSchema as <c>"additionalProperties": {}</c> (and, on some
+    /// 11.x versions, the already-invalid <c>"additionalProperties": []</c>).
+    /// Both forms are normalized to the boolean <c>"additionalProperties": true</c>,
+    /// which is semantically identical ("allow any additional property"). This is
+    /// not cosmetic: the empty-object form <c>{}</c> is silently corrupted to the
+    /// invalid array form <c>[]</c> by any hop that round-trips the schema through
+    /// a PHP associative decode (<c>json_decode($s, true)</c> cannot distinguish
+    /// <c>{}</c> from <c>[]</c>) — e.g. the ConnectorHub's Laravel baseline store.
+    /// The result then fails draft-07 metaschema validation at tool-call time
+    /// ("output schema compile: ... additionalProperties: got array, want boolean
+    /// or object"). The boolean <c>true</c> is a scalar that survives that
+    /// round-trip intact. The SDK does not trust the floating <c>NJsonSchema 11.*</c>
+    /// dependency, nor downstream JSON handling, to preserve the empty-object form.</item>
     /// </list>
     /// </summary>
     internal static string NormalizeSchemaDialect(string schemaJson)
@@ -161,19 +167,26 @@ public static class DeclarationFactory
     }
 
     /// <summary>
-    /// Recursively repair invalid <c>additionalProperties</c> values that some
-    /// NJsonSchema versions emit as an empty array. <c>additionalProperties</c>
-    /// is never legally an array (boolean or schema only), so any array value is
-    /// rewritten to an empty schema <c>{}</c>.
+    /// Recursively normalize the "allow any" <c>additionalProperties</c> schema to
+    /// the boolean form <c>true</c>. NJsonSchema emits it as an empty object
+    /// <c>{}</c> (or, on some 11.x versions, the invalid empty array <c>[]</c>);
+    /// both mean "any additional property is allowed". The empty-object form is
+    /// fragile — it is mangled to the invalid <c>[]</c> by any PHP associative
+    /// round-trip downstream (see <see cref="NormalizeSchemaDialect"/>) — so we
+    /// rewrite both the array and empty-object forms to the scalar <c>true</c>,
+    /// which survives such round-trips and is valid against the metaschema. A
+    /// non-empty <c>additionalProperties</c> schema, and the boolean <c>false</c>
+    /// (meaning "no additional properties"), are left untouched.
     /// </summary>
     private static void RepairInvalidSchemaNodes(JsonNode? node)
     {
         switch (node)
         {
             case JsonObject obj:
-                if (obj["additionalProperties"] is JsonArray)
+                if (obj.TryGetPropertyValue("additionalProperties", out var ap)
+                    && (ap is JsonArray || (ap is JsonObject apObj && apObj.Count == 0)))
                 {
-                    obj["additionalProperties"] = new JsonObject();
+                    obj["additionalProperties"] = JsonValue.Create(true);
                 }
                 // Snapshot values before recursing — nested repairs mutate child
                 // objects, not the collection being enumerated here.

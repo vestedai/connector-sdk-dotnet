@@ -5,24 +5,27 @@ using Xunit;
 namespace VestedAI.ConnectorSdk.Tests;
 
 // ---------------------------------------------------------------------------
-// Regression: some NJsonSchema 11.x versions serialize the "any" schema for an
-// object-valued dictionary (Dictionary<string, object>) as
-//   "additionalProperties": []
-// — an empty ARRAY, which is invalid against the JSON Schema metaschema
-// (additionalProperties must be a boolean or a schema object). The hub's strict
-// validator (santhosh-tekuri) then refuses to COMPILE the schema, failing every
-// call with "output schema compile: ... not valid against metaschema". Observed
-// in prod on erp_bc.data.run_sql (Rows: List<Dictionary<string,object>>).
+// Regression: the "any" schema for an object-valued dictionary
+// (Dictionary<string, object>) is emitted as
+//   "additionalProperties": {}      (NJsonSchema 11.6.x)
+//   "additionalProperties": []      (some older NJsonSchema 11.x — already invalid)
+// The empty-object form {} is valid JSON Schema on its own, but it is silently
+// corrupted to the invalid array form [] by any hop that round-trips the schema
+// through a PHP associative decode (json_decode($s, true) cannot tell {} from []) —
+// e.g. the ConnectorHub's Laravel baseline store. The hub's strict validator
+// (santhosh-tekuri) then refuses to COMPILE the schema, failing every call with
+// "output schema compile: ... not valid against metaschema". Observed in prod on
+// erp_bc.data.run_sql (Rows: List<Dictionary<string,object>>).
 //
-// The SDK must not trust the transitive NJsonSchema version to emit valid
-// JSON Schema — NormalizeSchemaDialect defensively repairs array-valued
-// additionalProperties to {} (empty schema = allow any value).
+// NormalizeSchemaDialect normalizes BOTH the empty-object and the array form to
+// the boolean "additionalProperties": true — semantically identical ("allow any"),
+// and a scalar that survives the lossy round-trip intact.
 // ---------------------------------------------------------------------------
 
 public class SchemaDialectRepairTests
 {
-    // The exact invalid shape observed in prod (erp_bc.data.run_sql output schema).
-    private const string ProdRunSqlSchema = """
+    // The invalid array shape observed on older NJsonSchema 11.x.
+    private const string ProdRunSqlSchemaArray = """
     {
       "type": "object",
       "title": "Result",
@@ -40,25 +43,51 @@ public class SchemaDialectRepairTests
     }
     """;
 
-    [Fact]
-    public void NormalizeSchemaDialect_RepairsArrayValuedAdditionalProperties()
+    // The valid-but-fragile empty-object shape emitted by NJsonSchema 11.6.x —
+    // the one that actually reaches the hub and is corrupted downstream to [].
+    private const string ProdRunSqlSchemaEmptyObject = """
     {
-        var fixedJson = DeclarationFactory.NormalizeSchemaDialect(ProdRunSqlSchema);
+      "type": "object",
+      "title": "Result",
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "Rows": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": {} },
+          "description": "Result rows as column-name → value maps."
+        },
+        "Columns": { "type": "array", "items": { "type": "string" } },
+        "RowCount": { "type": "integer", "format": "int32" }
+      },
+      "additionalProperties": false
+    }
+    """;
+
+    [Theory]
+    [InlineData(true)]   // array form  -> true
+    [InlineData(false)]  // empty-object form -> true
+    public void NormalizeSchemaDialect_NormalizesAllowAnyToBooleanTrue(bool arrayForm)
+    {
+        var input = arrayForm ? ProdRunSqlSchemaArray : ProdRunSqlSchemaEmptyObject;
+
+        var fixedJson = DeclarationFactory.NormalizeSchemaDialect(input);
 
         using var doc = JsonDocument.Parse(fixedJson);
         var ap = doc.RootElement
             .GetProperty("properties").GetProperty("Rows")
             .GetProperty("items").GetProperty("additionalProperties");
 
-        Assert.Equal(JsonValueKind.Object, ap.ValueKind);  // {} (empty schema = allow any), not []
-        Assert.Empty(ap.EnumerateObject());
+        // "allow any" must become the scalar `true` — the form that survives a
+        // PHP associative round-trip (json_decode(..., true)) without corruption.
+        Assert.Equal(JsonValueKind.True, ap.ValueKind);
     }
 
     [Fact]
-    public void NormalizeSchemaDialect_LeavesValidAdditionalPropertiesUntouched()
+    public void NormalizeSchemaDialect_LeavesAdditionalPropertiesFalseUntouched()
     {
-        // A legitimate boolean additionalProperties:false must survive unchanged.
-        var fixedJson = DeclarationFactory.NormalizeSchemaDialect(ProdRunSqlSchema);
+        // A legitimate boolean additionalProperties:false ("no additional
+        // properties") must survive unchanged — it is NOT an "allow any" schema.
+        var fixedJson = DeclarationFactory.NormalizeSchemaDialect(ProdRunSqlSchemaEmptyObject);
 
         using var doc = JsonDocument.Parse(fixedJson);
         var rootAp = doc.RootElement.GetProperty("additionalProperties");
