@@ -42,6 +42,9 @@ public sealed class ToolDeclaration
     /// <summary>The TResult type.</summary>
     public required Type ResultType { get; init; }
 
+    /// <summary>True when the handler is a PaginatedToolHandler (ROWSET).</summary>
+    public bool IsPaginated { get; init; }
+
     /// <summary>
     /// Create a handler instance and delegate to its InvokeBoxedAsync.
     /// The handler is instantiated fresh per call (stateless handlers expected).

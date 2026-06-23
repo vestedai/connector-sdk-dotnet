@@ -89,10 +89,10 @@ public static class DeclarationFactory
                    ?? throw new ConnectorException(
                           $"Type {t.FullName} is missing the [Tool] attribute.");
 
-        // Walk base-type chain to find ToolHandler<TArgs, TResult>.
-        (Type argsType, Type resultType) = ResolveHandlerGenericArgs(t)
+        // Walk base-type chain to find ToolHandler<TArgs, TResult> or PaginatedToolHandler<TArgs, TRow>.
+        (Type argsType, Type resultType, bool paginated) = ResolveHandlerGenericArgs(t)
             ?? throw new ConnectorException(
-                   $"Type {t.FullName} must subclass ToolHandler<TArgs, TResult>.");
+                   $"Type {t.FullName} must subclass ToolHandler<,> or PaginatedToolHandler<,>.");
 
         // Validate sensitivity.
         var sensitivity = toolAttr.Sensitivity ?? "";
@@ -121,6 +121,7 @@ public static class DeclarationFactory
             HandlerType     = t,
             ArgsType        = argsType,
             ResultType      = resultType,
+            IsPaginated     = paginated,
         };
     }
 
@@ -206,21 +207,22 @@ public static class DeclarationFactory
 
     /// <summary>
     /// Walk the base-type chain of <paramref name="t"/> looking for a closed
-    /// generic <c>ToolHandler&lt;TArgs, TResult&gt;</c> base type and extract
-    /// the two type arguments.
+    /// generic <c>ToolHandler&lt;TArgs, TResult&gt;</c> or
+    /// <c>PaginatedToolHandler&lt;TArgs, TRow&gt;</c> base type and extract
+    /// the two type arguments together with a flag indicating which it found.
     /// </summary>
-    private static (Type argsType, Type resultType)? ResolveHandlerGenericArgs(Type t)
+    private static (Type argsType, Type resultType, bool paginated)? ResolveHandlerGenericArgs(Type t)
     {
-        var handlerOpen = typeof(ToolHandler<,>);
-        var current = t.BaseType;
-        while (current is not null)
+        var single = typeof(ToolHandler<,>);
+        var paged  = typeof(PaginatedToolHandler<,>);
+        for (var cur = t.BaseType; cur is not null; cur = cur.BaseType)
         {
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == handlerOpen)
+            if (cur.IsGenericType)
             {
-                var args = current.GetGenericArguments();
-                return (args[0], args[1]);
+                var def = cur.GetGenericTypeDefinition();
+                if (def == single) { var a = cur.GetGenericArguments(); return (a[0], a[1], false); }
+                if (def == paged)  { var a = cur.GetGenericArguments(); return (a[0], a[1], true); }
             }
-            current = current.BaseType;
         }
         return null;
     }

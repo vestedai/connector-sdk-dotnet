@@ -5,6 +5,16 @@ using Xunit;
 
 namespace VestedAI.ConnectorSdk.Tests;
 
+/// <summary>Minimal single (non-paginated) tool used to verify the base throws.</summary>
+[Tool(Key = "t.single_echo", Description = "echo", Sensitivity = "read")]
+public class SingleEchoTool : ToolHandler<SingleEchoTool.Args, SingleEchoTool.Result>
+{
+    public class Args { public string Msg { get; set; } = ""; }
+    public class Result { public string Echo { get; set; } = ""; }
+    public override Task<Result> HandleAsync(Args a, ToolContext ctx)
+        => Task.FromResult(new Result { Echo = a.Msg });
+}
+
 [Tool(Key = "t.rows", Description = "rows", Sensitivity = "read")]
 public class RowsTool : PaginatedToolHandler<RowsTool.Args, RowsTool.Row>
 {
@@ -58,12 +68,26 @@ public class PaginatedToolHandlerTests
     [Fact]
     public void InvokePagedBoxedAsync_OnSingleTool_Throws()
     {
-        // Verify ToolHandlerBase default throws for single (non-paginated) tools
-        var h = new RowsTool();
-        // RowsTool is paginated so we need a single tool to test the base throw.
-        // The base default is exercised when someone calls it on a ToolHandler<,>.
-        // We test the type-system contract: ArgsType/ResultType not expected on paginated tools.
-        Assert.IsAssignableFrom<ToolHandlerBase>(h);
+        // Verify ToolHandlerBase.InvokePagedBoxedAsync throws NotSupportedException
+        // when called on a plain (non-paginated) ToolHandler<,> subclass.
+        // The base default is `=> throw`, so it throws synchronously before returning a Task.
+        var h = (ToolHandlerBase)new SingleEchoTool();
+        var args = new SingleEchoTool.Args { Msg = "hi" };
+        var cursor = new DatasetCursor { Token = null, PageSize = 10 };
+        var ctx = new ToolContext(1, "a", "r", "c");
+        void Call() { h.InvokePagedBoxedAsync(args, cursor, ctx); }
+        Assert.Throws<System.NotSupportedException>(Call);
+    }
+
+    [Fact]
+    public void FromToolType_PaginatedTool_IsPaginated_AndRowSchema()
+    {
+        var decl = VestedAI.ConnectorSdk.Reflection.DeclarationFactory.FromToolType(typeof(RowsTool));
+        Assert.True(decl.IsPaginated);
+        using var doc = System.Text.Json.JsonDocument.Parse(decl.OutputSchemaJson!);
+        // Row schema describes one Row { I:int }, not an array.
+        Assert.Equal(System.Text.Json.JsonValueKind.Object,
+            doc.RootElement.GetProperty("properties").GetProperty("I").ValueKind);
     }
 
     [Fact]
