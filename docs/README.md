@@ -8,6 +8,7 @@
 ## Reference
 
 - [API reference](api.md) — `ConnectorHost`, `[Agent]`, `[Instruction]`, `[Tool]`, `ToolHandler<,>`, `ToolContext`, sensitivity
+- [Large datasets](large-datasets.md) — `PaginatedToolHandler<,>`: tools whose result sets exceed the LLM context; sample + `dataset_ref`, on-demand full export, migration checklist
 
 ## Operate
 
