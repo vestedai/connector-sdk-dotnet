@@ -10,9 +10,16 @@
     <RootNamespace>VestedAI.ConnectorSdk</RootNamespace>
     <Description>Official .NET SDK for the Vested AI ConnectorHub.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- Without this the NuGet package page renders no description at all —
+         `dotnet nuget push` only warns ("Readme missing"), so it shipped
+         unnoticed for every release so far. -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Grpc.Net.Client" Version="2.*" />
     <PackageReference Include="Google.Protobuf" Version="3.*" />
