@@ -20,6 +20,7 @@ internal sealed class Daemon
     private readonly GrpcClient _client;
     private readonly SignalHandler _signals;
     private readonly Action<Vested.V1.ToolCallRequest>? _dispatcher;
+    private readonly VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? _credentialOps;
 
     private HeartbeatTimer? _heartbeat;
 
@@ -34,12 +35,15 @@ internal sealed class Daemon
         IConnectorRuntime app,
         GrpcClient client,
         SignalHandler signals,
-        Action<Vested.V1.ToolCallRequest>? dispatcher = null)
+        Action<Vested.V1.ToolCallRequest>? dispatcher = null,
+        // Null when the connector declares no per-user credential handler.
+        VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? credentialOps = null)
     {
         _app = app;
         _client = client;
         _signals = signals;
         _dispatcher = dispatcher;
+        _credentialOps = credentialOps;
     }
 
     /// <summary>Runs one connector session and returns an exit code (0, 1, or 78).</summary>
@@ -152,6 +156,18 @@ internal sealed class Daemon
                 else
                 {
                     _dispatcher(msg.ToolCallRequest);
+                }
+            }
+            else if (msg.CredentialOpRequest is not null)
+            {
+                // Answered inline: a credential op is one call to one system
+                // and the platform is waiting on a bounded deadline. Silence
+                // would make it wait the deadline out.
+                if (_credentialOps is not null)
+                {
+                    var credResp = await _credentialOps.DispatchAsync(msg.CredentialOpRequest);
+                    await _client.SendAsync(new ConnectorMsg { CredentialOpResponse = credResp })
+                        .ConfigureAwait(false);
                 }
             }
             else if (msg.HeartbeatAck is not null)
