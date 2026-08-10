@@ -20,4 +20,12 @@
   <ItemGroup>
     <ProjectReference Include="../../src/VestedAI.ConnectorSdk/VestedAI.ConnectorSdk.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The single shared cross-SDK fixture. Linked, not copied: there is
+         exactly one credential-envelope-vectors.json in the repo and every SDK
+         reads it, which is what stops four implementations drifting apart. -->
+    <Content Include="../../../testdata/credential-envelope-vectors.json"
+             Link="testdata/credential-envelope-vectors.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
