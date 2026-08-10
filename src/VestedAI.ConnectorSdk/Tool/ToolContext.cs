@@ -38,4 +38,36 @@ public sealed record ToolContext(
     /// Source: <c>ToolCallRequest.erp_department_identifiers</c> (proto field 12, repeated).
     /// </summary>
     public IReadOnlyList<string> ErpDepartmentIdentifiers { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Lazy access to the caller's sealed credential. Null for connectors that
+    /// declare no credential schema.
+    /// </summary>
+    public VestedAI.ConnectorSdk.Credential.CredentialResolver? Credentials { get; init; }
+
+    /// <summary>
+    /// True when the platform forwarded a sealed credential for this caller.
+    /// False for a connector that declares no credential schema.
+    /// </summary>
+    public bool HasCredential() => Credentials?.HasCredential() ?? false;
+
+    /// <summary>
+    /// The calling user's credentials for this integration, decrypted.
+    ///
+    /// The envelope is opened and its identity binding verified inside the SDK,
+    /// so a connector author cannot skip the check that makes per-user auth mean
+    /// anything: an envelope sealed for another user throws rather than
+    /// returning someone else's secrets.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Credential()
+    {
+        if (Credentials is null)
+        {
+            throw new VestedAI.ConnectorSdk.Credential.CredentialUnavailableException(
+                "No user credential was supplied for this tool call. Either this connector " +
+                "declares no credential schema, or the platform refused the call before dispatch.");
+        }
+
+        return Credentials.Credential();
+    }
 }
