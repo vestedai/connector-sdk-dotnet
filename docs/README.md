@@ -10,6 +10,8 @@
 - [API reference](api.md) — `ConnectorHost`, `[Agent]`, `[Instruction]`, `[Tool]`, `ToolHandler<,>`, `ToolContext`, sensitivity
 - [Large datasets](large-datasets.md) — `PaginatedToolHandler<,>`: tools whose result sets exceed the LLM context; sample + `dataset_ref`, on-demand full export, migration checklist
 
+- [Per-user credentials](credentials.md) — act on behalf of the calling user: sealed credentials the platform cannot read, validation, key rotation
+
 ## Operate
 
 - [Operations](operations.md) — Docker, environment variables, reconnect supervisor, exit codes, signal handling, deployment recipes
