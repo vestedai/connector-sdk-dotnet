@@ -33,7 +33,7 @@ public class CredentialOpDispatcherTests
 
     private static CredentialOpDispatcher Dispatcher(IUserCredentialHandler? handler) =>
         new(new CredentialOpener(ConnectorKey), handler,
-            Vector.GetProperty("connector_id").GetString()!);
+            () => Vector.GetProperty("connector_id").GetString()!);
 
     private sealed class SpyHandler : IUserCredentialHandler
     {

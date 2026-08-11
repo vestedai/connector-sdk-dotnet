@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using NJsonSchema;
 using NJsonSchema.Generation;
 using VestedAI.ConnectorSdk.Agent;
+using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
 using VestedAI.ConnectorSdk.Tool;
 
@@ -63,6 +64,122 @@ public static class DeclarationFactory
             Description:  agentAttr.Description,
             Status:       agentAttr.Status,
             Instructions: instructions);
+    }
+
+    /// <summary>
+    /// Build a <see cref="CredentialDeclaration"/> from a class decorated with
+    /// <see cref="CredentialAttribute"/> and one
+    /// <see cref="CredentialFieldAttribute"/> per form field.
+    /// </summary>
+    /// <remarks>
+    /// Validation is strict and happens at startup rather than at registration:
+    /// a malformed credential schema would otherwise surface as a rejected
+    /// <c>Register</c> or, worse, a form the user cannot complete.
+    /// </remarks>
+    /// <exception cref="ConnectorException">
+    /// Thrown when <c>[Credential]</c> is missing, the type does not implement
+    /// <see cref="IUserCredentialHandler"/>, the kind or a field type is not
+    /// canonical, no fields are declared, a field key is blank or duplicated,
+    /// or a "select" field declares no options.
+    /// </exception>
+    public static CredentialDeclaration FromCredentialType(Type t)
+    {
+        var credAttr = t.GetCustomAttributes(typeof(CredentialAttribute), inherit: false)
+                        .Cast<CredentialAttribute>()
+                        .FirstOrDefault()
+                   ?? throw new ConnectorException(
+                          $"Type {t.FullName} is missing the [Credential] attribute.");
+
+        if (!typeof(IUserCredentialHandler).IsAssignableFrom(t))
+        {
+            throw new ConnectorException(
+                $"Type {t.FullName} is decorated with [Credential] but does not implement " +
+                "IUserCredentialHandler.");
+        }
+
+        // The parameterless-constructor requirement is enforced in Build(), and
+        // only when the SDK has to construct the handler itself — a handler with
+        // dependencies can be supplied ready-made via UseCredentialHandler.
+        if (t.IsAbstract)
+        {
+            throw new ConnectorException(
+                $"Credential handler {t.FullName} must be a concrete class.");
+        }
+
+        var kind = string.IsNullOrWhiteSpace(credAttr.Kind) ? "basic" : credAttr.Kind;
+        if (!CredentialKinds.All.Contains(kind, StringComparer.Ordinal))
+        {
+            throw new ConnectorException(
+                $"Credential handler {t.FullName} declares kind \"{kind}\"; " +
+                $"expected one of: {string.Join(", ", CredentialKinds.All)}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(credAttr.Title))
+        {
+            throw new ConnectorException(
+                $"Credential handler {t.FullName} must declare a Title — it is the heading " +
+                "of the form the user fills in.");
+        }
+
+        var fieldAttrs = t.GetCustomAttributes(typeof(CredentialFieldAttribute), inherit: false)
+                          .Cast<CredentialFieldAttribute>()
+                          .ToList();
+
+        if (fieldAttrs.Count == 0)
+        {
+            throw new ConnectorException(
+                $"Credential handler {t.FullName} declares no [CredentialField]s; the platform " +
+                "would render an empty form.");
+        }
+
+        var fields = new List<CredentialFieldDeclaration>(fieldAttrs.Count);
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var f in fieldAttrs)
+        {
+            if (string.IsNullOrWhiteSpace(f.Key))
+            {
+                throw new ConnectorException(
+                    $"Credential handler {t.FullName} declares a [CredentialField] with no Key.");
+            }
+
+            if (!seenKeys.Add(f.Key))
+            {
+                throw new ConnectorException(
+                    $"Credential handler {t.FullName} declares duplicate field key \"{f.Key}\".");
+            }
+
+            var type = string.IsNullOrWhiteSpace(f.Type) ? "text" : f.Type;
+            if (!CredentialFieldTypes.All.Contains(type, StringComparer.Ordinal))
+            {
+                throw new ConnectorException(
+                    $"Credential field \"{f.Key}\" on {t.FullName} declares type \"{type}\"; " +
+                    $"expected one of: {string.Join(", ", CredentialFieldTypes.All)}.");
+            }
+
+            var options = f.Options ?? Array.Empty<string>();
+            if (type == "select" && options.Length == 0)
+            {
+                throw new ConnectorException(
+                    $"Credential field \"{f.Key}\" on {t.FullName} is a \"select\" but declares " +
+                    "no Options.");
+            }
+
+            fields.Add(new CredentialFieldDeclaration(
+                Key:         f.Key,
+                Label:       string.IsNullOrWhiteSpace(f.Label) ? f.Key : f.Label,
+                Type:        type,
+                Required:    f.Required,
+                Placeholder: f.Placeholder ?? "",
+                Options:     options));
+        }
+
+        return new CredentialDeclaration(
+            Kind:        kind,
+            Title:       credAttr.Title,
+            HelpText:    credAttr.HelpText ?? "",
+            Fields:      fields,
+            HandlerType: t);
     }
 
     /// <summary>

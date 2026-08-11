@@ -144,9 +144,31 @@ internal static class Supervisor
             await using (client.ConfigureAwait(false))
             {
                 client.Connect();
+
+                // One identity holder per session. The Daemon fills it from
+                // HelloAck; the credential paths below read it lazily, because
+                // they are constructed before the handshake has run.
+                var identity = new SessionIdentity();
+
                 // Construct a Dispatcher per session; pass client.SendAsync as the send seam.
-                var dispatcher = new Dispatcher(_app.Tools, client.SendAsync);
-                var daemon = new Daemon(_app, client, signals, dispatcher.Dispatch);
+                var dispatcher = new Dispatcher(
+                    _app.Tools,
+                    client.SendAsync,
+                    logger: null,
+                    credentialOpener: _app.CredentialOpener,
+                    connectorId: () => identity.ConnectorId);
+
+                // Null unless the connector declared a credential schema, which
+                // keeps every existing connector on exactly its current path.
+                var credentialOps = _app.CredentialHandler is null || _app.CredentialOpener is null
+                    ? null
+                    : new Credential.CredentialOpDispatcher(
+                        _app.CredentialOpener,
+                        _app.CredentialHandler,
+                        () => identity.ConnectorId);
+
+                var daemon = new Daemon(
+                    _app, client, signals, dispatcher.Dispatch, credentialOps, identity);
                 var exit = await daemon.RunAsync(ct).ConfigureAwait(false);
                 return (exit, daemon.HandshakeCompleted);
             }
