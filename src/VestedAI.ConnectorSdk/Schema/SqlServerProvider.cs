@@ -26,12 +26,35 @@ public sealed class SqlServerProvider : IRelationalSchemaProvider
             .ToList();
     }
 
+    /// <summary>
+    /// A cheap hash of the source catalog's shape.
+    /// </summary>
+    /// <remarks>
+    /// Hashes sorted <c>"{schema}.{table}|{columnCount}"</c> entries, not just
+    /// table names. A BC extension deploy typically ADDS A FIELD to an
+    /// existing table rather than adding a new table, so a name-only hash
+    /// would stay unchanged and the core would never re-extract — the
+    /// snapshot goes silently stale, which is exactly the
+    /// confidently-wrong-SQL failure this layer exists to prevent. Including
+    /// the column count catches tables added/removed AND fields
+    /// added/removed. It does NOT catch a same-shape type change (e.g.
+    /// <c>nvarchar(50)</c> → <c>nvarchar(100)</c>) — the column count is
+    /// unchanged, so the hash is unchanged. That gap is accepted here; the
+    /// nightly full re-extract covers it. The sort is load-bearing: without
+    /// it, an unordered <c>INFORMATION_SCHEMA</c> scan would re-hash
+    /// differently on every poll and force a full re-extract every time.
+    /// </remarks>
     public async Task<string> CatalogFingerprintAsync(CancellationToken ct)
     {
         var tables = await _reader.TablesAsync(ct).ConfigureAwait(false);
+        var columns = await _reader.ColumnsAsync(ct).ConfigureAwait(false);
+
+        var columnCountByTable = columns
+            .GroupBy(c => c.TableName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
 
         var joined = string.Join('\n', tables
-            .Select(t => $"{t.Schema}.{t.Name}")
+            .Select(t => $"{t.Schema}.{t.Name}|{(columnCountByTable.TryGetValue(t.Name, out var n) ? n : 0)}")
             .OrderBy(s => s, StringComparer.Ordinal));
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(joined))).ToLowerInvariant();
@@ -81,7 +104,13 @@ public sealed class SqlServerProvider : IRelationalSchemaProvider
                 variants.Add(new CanonicalVariant(name, "extension", ordinal++));
             }
 
-            var joinKey = columnsByTable.TryGetValue(basePhysical, out var baseCols)
+            // Empty for single-variant entities (canonical store contract,
+            // 2026_08_12_000100_create_schema_snapshot_tables.php): a
+            // single-variant entity has nothing to stitch together, so a
+            // populated join key there would name a column with no join to
+            // perform. The primary key itself is not lost — it is still
+            // discoverable per-variant via CanonicalColumn.IsPk.
+            var joinKey = variants.Count > 1 && columnsByTable.TryGetValue(basePhysical, out var baseCols)
                 ? baseCols.Where(c => c.IsPrimaryKey)
                     .OrderBy(c => c.OrdinalPosition)
                     .Select(c => c.ColumnName)

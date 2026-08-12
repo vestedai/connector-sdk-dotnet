@@ -73,6 +73,46 @@ public class SqlServerProviderTests
     }
 
     [Fact]
+    public async Task MultipleEntitiesAreOrderedByLogicalNameWithoutCrossContamination()
+    {
+        // Every other fixture in this file produces exactly one entity, so
+        // entity ordering, ScopeKey, Kind and variant Ordinal were never
+        // pinned, and one entity's columns leaking into another's was never
+        // guarded against.
+        const string custBase = "ASG$Customer$437dbf0e-84ff-417a-965d-ed2bb9650972";
+        const string custExt  = "ASG$Customer$5ecfc871-5d82-43f1-9c54-59685e82318d";
+        const string locBase  = "ASG$Location$437dbf0e-84ff-417a-965d-ed2bb9650972";
+
+        var cat = new FakeCatalog();
+        cat.Tables.Add(new CatalogTable("dbo", custBase));
+        cat.Tables.Add(new CatalogTable("dbo", custExt));
+        cat.Tables.Add(new CatalogTable("dbo", locBase));
+        cat.Columns.Add(new CatalogColumn(custBase, "No.", "nvarchar", false, 1, true));
+        cat.Columns.Add(new CatalogColumn(custExt, "No.", "nvarchar", false, 1, true));
+        cat.Columns.Add(new CatalogColumn(custExt, "Credit Limit", "decimal", true, 2, false));
+        cat.Columns.Add(new CatalogColumn(locBase, "Code", "nvarchar", false, 1, true));
+        cat.Links.Add(new CatalogExtensionLink(custExt, custBase));
+
+        var schema = await new SqlServerProvider(cat).DescribeAsync("ASG", default);
+
+        Assert.Equal(new[] { "Customer", "Location" }, schema.Entities.Select(e => e.LogicalName));
+
+        var customer = schema.Entities[0];
+        Assert.Equal("ASG", customer.ScopeKey);
+        Assert.Equal("table", customer.Kind);
+        Assert.Equal(2, customer.Variants.Count);
+        Assert.Equal(0, customer.Variants.Single(v => v.Role == "base").Ordinal);
+        Assert.Equal(1, customer.Variants.Single(v => v.Role == "extension").Ordinal);
+        Assert.DoesNotContain(customer.Columns, c => c.Name == "Code");
+
+        var location = schema.Entities[1];
+        Assert.Equal("ASG", location.ScopeKey);
+        Assert.Equal("table", location.Kind);
+        Assert.Single(location.Variants);
+        Assert.DoesNotContain(location.Columns, c => c.Name == "Credit Limit");
+    }
+
+    [Fact]
     public async Task MergesColumnsAcrossVariantsAndRecordsTheirOrigin()
     {
         var schema = await new SqlServerProvider(TwoVariantItem()).DescribeAsync("ASG", default);
@@ -80,6 +120,34 @@ public class SqlServerProviderTests
         var item = schema.Entities.Single();
         Assert.Equal(4, item.Columns.Count);
         Assert.Equal(ItemExt, item.Columns.Single(c => c.Name == "Retail Dept_").VariantPhysicalName);
+    }
+
+    [Fact]
+    public async Task ColumnFieldsBeyondNameAndOriginAreCorrectForBaseAndExtension()
+    {
+        // Every other test reads only Name, VariantPhysicalName and Caption —
+        // hard-coding IsPk: false, or inverting Nullable, would still pass
+        // them all. IsPk is how a downstream consumer finds the join column
+        // per variant, so it has to be right on both the base's own PK
+        // column and the extension's mirrored PK column, not just one.
+        var schema = await new SqlServerProvider(TwoVariantItem()).DescribeAsync("ASG", default);
+
+        var item = schema.Entities.Single();
+
+        var baseKeyCol = item.Columns.Single(c => c.Name == "No." && c.VariantPhysicalName == ItemBase);
+        Assert.True(baseKeyCol.IsPk);
+        Assert.False(baseKeyCol.Nullable);
+        Assert.Equal("nvarchar", baseKeyCol.Type);
+        Assert.Equal(1, baseKeyCol.Position);
+
+        var extKeyCol = item.Columns.Single(c => c.Name == "No." && c.VariantPhysicalName == ItemExt);
+        Assert.True(extKeyCol.IsPk);
+
+        var extOnlyCol = item.Columns.Single(c => c.Name == "Retail Dept_");
+        Assert.False(extOnlyCol.IsPk);
+        Assert.True(extOnlyCol.Nullable);
+        Assert.Equal("nvarchar", extOnlyCol.Type);
+        Assert.Equal(2, extOnlyCol.Position);
     }
 
     [Fact]
@@ -102,6 +170,59 @@ public class SqlServerProviderTests
         var schema = await new SqlServerProvider(TwoVariantItem()).DescribeAsync("ASG", default);
 
         Assert.Equal(new[] { "No." }, schema.Entities.Single().JoinKey);
+    }
+
+    [Fact]
+    public async Task JoinKeyOrdersACompositePrimaryKeyByOrdinalPositionNotInsertionOrder()
+    {
+        // Every other fixture's primary key is one column, so the
+        // .OrderBy(c => c.OrdinalPosition) on the join key never ran against
+        // more than one row. BC's own Sales Line and Item Ledger Entry carry
+        // 3-part keys, and the join key is this slice's entire output.
+        // Columns are inserted here scrambled (position 2, then 3, then 1) —
+        // inserting them already sorted would prove nothing about the
+        // ordering logic actually running.
+        const string baseTable = "ASG$Sales Line$437dbf0e-84ff-417a-965d-ed2bb9650972";
+        const string extTable  = "ASG$Sales Line$5ecfc871-5d82-43f1-9c54-59685e82318d";
+
+        var cat = new FakeCatalog();
+        cat.Tables.Add(new CatalogTable("dbo", baseTable));
+        cat.Tables.Add(new CatalogTable("dbo", extTable));
+        cat.Columns.Add(new CatalogColumn(baseTable, "Line No.", "int", false, 2, true));
+        cat.Columns.Add(new CatalogColumn(baseTable, "Document Type", "int", false, 3, true));
+        cat.Columns.Add(new CatalogColumn(baseTable, "Document No.", "nvarchar", false, 1, true));
+        cat.Columns.Add(new CatalogColumn(extTable, "Document No.", "nvarchar", false, 1, true));
+        cat.Links.Add(new CatalogExtensionLink(extTable, baseTable));
+
+        var schema = await new SqlServerProvider(cat).DescribeAsync("ASG", default);
+
+        var entity = schema.Entities.Single(e => e.LogicalName == "Sales Line");
+        Assert.Equal(new[] { "Document No.", "Line No.", "Document Type" }, entity.JoinKey);
+    }
+
+    [Fact]
+    public async Task MultiVariantEntityWithNoPrimaryKeyEmitsEmptyJoinKeyAndNoRelation()
+    {
+        // There is nothing to join on: a base variant with zero
+        // IsPrimaryKey columns must not emit a variant_join relation, even
+        // though the entity itself has more than one variant.
+        const string noKeyBase = "ASG$Comment Line$437dbf0e-84ff-417a-965d-ed2bb9650972";
+        const string noKeyExt  = "ASG$Comment Line$5ecfc871-5d82-43f1-9c54-59685e82318d";
+
+        var cat = new FakeCatalog();
+        cat.Tables.Add(new CatalogTable("dbo", noKeyBase));
+        cat.Tables.Add(new CatalogTable("dbo", noKeyExt));
+        cat.Columns.Add(new CatalogColumn(noKeyBase, "Text", "nvarchar", true, 1, false));
+        cat.Columns.Add(new CatalogColumn(noKeyExt, "Text", "nvarchar", true, 1, false));
+        cat.Columns.Add(new CatalogColumn(noKeyExt, "Extra", "nvarchar", true, 2, false));
+        cat.Links.Add(new CatalogExtensionLink(noKeyExt, noKeyBase));
+
+        var schema = await new SqlServerProvider(cat).DescribeAsync("ASG", default);
+
+        var entity = schema.Entities.Single(e => e.LogicalName == "Comment Line");
+        Assert.Equal(2, entity.Variants.Count);
+        Assert.Empty(entity.JoinKey);
+        Assert.Empty(schema.Relations);
     }
 
     [Fact]
@@ -158,6 +279,7 @@ public class SqlServerProviderTests
         var entity = schema.Entities.Single();
         Assert.Single(entity.Variants);
         Assert.Equal("base", entity.Variants[0].Role);
+        Assert.Empty(entity.JoinKey);
         Assert.Empty(schema.Relations);
     }
 
@@ -237,6 +359,22 @@ public class SqlServerProviderTests
     }
 
     [Fact]
+    public async Task ScopesAsyncSortsCompaniesRegardlessOfCatalogInsertionOrder()
+    {
+        // TwoVariantItem() happens to insert "ASG" before "ASG - HData",
+        // which already matches sorted order, so ScopesAsyncListsEvery...
+        // above cannot tell a real sort from a coincidence. This fixture
+        // inserts them the other way around.
+        var cat = new FakeCatalog();
+        cat.Tables.Add(new CatalogTable("dbo", HDataItem));
+        cat.Tables.Add(new CatalogTable("dbo", ItemBase));
+
+        var scopes = await new SqlServerProvider(cat).ScopesAsync(default);
+
+        Assert.Equal(new[] { "ASG", "ASG - HData" }, scopes);
+    }
+
+    [Fact]
     public async Task CatalogFingerprintChangesWhenATableIsAdded()
     {
         var before = await new SqlServerProvider(TwoVariantItem()).CatalogFingerprintAsync(default);
@@ -246,5 +384,48 @@ public class SqlServerProviderTests
         var after = await new SqlServerProvider(cat).CatalogFingerprintAsync(default);
 
         Assert.NotEqual(before, after);
+    }
+
+    [Fact]
+    public async Task CatalogFingerprintChangesWhenAColumnIsAddedToAnExistingTable()
+    {
+        // A BC extension deploy typically adds a FIELD to an existing table,
+        // not a new table. A name-only fingerprint would miss this entirely
+        // and the core would never re-extract a stale snapshot.
+        var before = await new SqlServerProvider(TwoVariantItem()).CatalogFingerprintAsync(default);
+
+        var cat = TwoVariantItem();
+        cat.Columns.Add(new CatalogColumn(ItemBase, "Type", "int", true, 3, false));
+        var after = await new SqlServerProvider(cat).CatalogFingerprintAsync(default);
+
+        Assert.NotEqual(before, after);
+    }
+
+    [Fact]
+    public async Task CatalogFingerprintIsStableRegardlessOfCatalogRowOrder()
+    {
+        // The whole reason the fingerprint is cheap to poll is that an
+        // unordered INFORMATION_SCHEMA scan of the same, unchanged catalog
+        // still hashes to the same value. Two catalogs with identical
+        // content, inserted in opposite table AND column order, must
+        // produce identical hashes.
+        var forward = new FakeCatalog();
+        forward.Tables.Add(new CatalogTable("dbo", ItemBase));
+        forward.Tables.Add(new CatalogTable("dbo", ItemExt));
+        forward.Columns.Add(new CatalogColumn(ItemBase, "No.", "nvarchar", false, 1, true));
+        forward.Columns.Add(new CatalogColumn(ItemExt, "No.", "nvarchar", false, 1, true));
+        forward.Columns.Add(new CatalogColumn(ItemExt, "Retail Dept_", "nvarchar", true, 2, false));
+
+        var reversed = new FakeCatalog();
+        reversed.Tables.Add(new CatalogTable("dbo", ItemExt));
+        reversed.Tables.Add(new CatalogTable("dbo", ItemBase));
+        reversed.Columns.Add(new CatalogColumn(ItemExt, "Retail Dept_", "nvarchar", true, 2, false));
+        reversed.Columns.Add(new CatalogColumn(ItemExt, "No.", "nvarchar", false, 1, true));
+        reversed.Columns.Add(new CatalogColumn(ItemBase, "No.", "nvarchar", false, 1, true));
+
+        var forwardHash = await new SqlServerProvider(forward).CatalogFingerprintAsync(default);
+        var reversedHash = await new SqlServerProvider(reversed).CatalogFingerprintAsync(default);
+
+        Assert.Equal(forwardHash, reversedHash);
     }
 }
