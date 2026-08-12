@@ -1,15 +1,10 @@
+using System.Text.Json;
 using VestedAI.ConnectorSdk.Schema;
 using Xunit;
 
 namespace VestedAI.ConnectorSdk.Tests.Schema;
 
-// The brief specifies `file sealed class StubProvider`, but that does not
-// compile here: CS9051 fires because SchemaDescribeToolTests (the type whose
-// members reference StubProvider) is not itself file-local. Task 9 hit the
-// identical error and fixed it the same way — internal sealed, matching the
-// existing test doubles in this assembly (e.g. FakeCatalog in
-// SqlServerProviderTests.cs).
-internal sealed class StubProvider : IRelationalSchemaProvider
+file sealed class StubProvider : IRelationalSchemaProvider
 {
     public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<string>>(new[] { "ASG" });
@@ -69,6 +64,15 @@ public class SchemaDescribeToolTests
         var row = Assert.Single(rows);
         Assert.Equal("variant_join", row["kind"]?.ToString());
         Assert.Equal("Item", row["from_entity"]?.ToString());
+        Assert.Equal("Item", row["to_entity"]?.ToString());
+
+        // from_columns / to_columns are JSON arrays, so they deserialize as
+        // JsonElement of kind Array rather than IReadOnlyList<string> — same
+        // boxing behaviour as the scalar fields above, just one level deeper.
+        var fromColumns = ((JsonElement)row["from_columns"]!).EnumerateArray().Select(e => e.GetString());
+        var toColumns = ((JsonElement)row["to_columns"]!).EnumerateArray().Select(e => e.GetString());
+        Assert.Equal(new[] { "No." }, fromColumns);
+        Assert.Equal(new[] { "No." }, toColumns);
     }
 
     [Fact]
