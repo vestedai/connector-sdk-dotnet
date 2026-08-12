@@ -42,6 +42,25 @@ public class BcPhysicalNameTests
         Assert.False(BcPhysicalName.TryParse(input, out _));
     }
 
+    [Theory]
+    // Trailing content after an otherwise-valid GUID must not be silently
+    // dropped — without the '$' end-anchor this parses and yields a wrong
+    // ExtensionAppId.
+    [InlineData("ASG$Item$437dbf0e-84ff-417a-965d-ed2bb9650972-EXTRA")]
+    // Trailing '$'-delimited segment after a valid GUID: same anchoring hazard.
+    [InlineData("ASG$Item$437dbf0e-84ff-417a-965d-ed2bb9650972$more")]
+    // One character short of a real GUID.
+    [InlineData("ASG$Item$437dbf0e-84ff-417a-965d-ed2bb965097")]
+    // Right length (36 chars), wrong shape — guards against a sloppy
+    // [0-9a-fA-F-]{36} class, which this string would satisfy.
+    [InlineData("ASG$Item$------------------------------------")]
+    // Non-hex character in a GUID position.
+    [InlineData("ASG$Item$437dbf0g-84ff-417a-965d-ed2bb9650972")]
+    public void RejectsMalformedOrUnanchoredGuidSuffix(string input)
+    {
+        Assert.False(BcPhysicalName.TryParse(input, out _));
+    }
+
     [Fact]
     public void CompanyIsLazySoTheGuidAnchorsTheParse()
     {
