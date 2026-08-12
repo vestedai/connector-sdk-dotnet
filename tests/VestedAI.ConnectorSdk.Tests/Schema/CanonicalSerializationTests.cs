@@ -50,4 +50,54 @@ public class CanonicalSerializationTests
         Assert.Contains("\"from_entity\":\"Item Ledger Entry\"", json);
         Assert.Contains("\"to_columns\":[\"No.\"]", json);
     }
+
+    [Fact]
+    public void SchemaSerialisesNestedGraphInOneCall()
+    {
+        // CanonicalSchema is what IRelationalSchemaProvider.DescribeAsync
+        // returns, but neither test above ever constructs or serialises one —
+        // its own "entities"/"relations" keys, and the nested Variant/Column
+        // fields, were only ever exercised as a side effect. This proves the
+        // options propagate through the whole object graph in a single
+        // Serialize call, which the other two tests rely on implicitly.
+        var variant = new CanonicalVariant(
+            "ASG$Customer$5b1e9b3a-2f34-4a11-9b0d-2a6a2e6a2c11", "extension", 2);
+        var column = new CanonicalColumn(
+            "Name", "nvarchar", true, 3, false, "Customer Name",
+            "ASG$Customer$5b1e9b3a-2f34-4a11-9b0d-2a6a2e6a2c11");
+        var entity = new CanonicalEntity(
+            LogicalName: "Customer",
+            ScopeKey: "ASG",
+            Kind: "table",
+            Comment: null,
+            JoinKey: new[] { "No." },
+            Variants: new[] { variant },
+            Columns: new[] { column });
+        var relation = new CanonicalRelation(
+            "Sales Line", new[] { "No." }, "Customer", new[] { "No." }, "fk");
+        var schema = new CanonicalSchema(new[] { entity }, new[] { relation });
+
+        var json = JsonSerializer.Serialize(schema, CanonicalJson.Options);
+
+        // Top-level container keys.
+        Assert.Contains("\"entities\":[", json);
+        Assert.Contains("\"relations\":[", json);
+
+        // Nested entity/relation content is still snake_case inside the
+        // container, not just at the top level.
+        Assert.Contains("\"logical_name\":\"Customer\"", json);
+        Assert.Contains("\"from_entity\":\"Sales Line\"", json);
+
+        // CanonicalVariant fields, asserted directly for the first time.
+        Assert.Contains("\"role\":\"extension\"", json);
+        Assert.Contains("\"ordinal\":2", json);
+
+        // CanonicalColumn fields, asserted directly for the first time.
+        // variant_physical_name and is_pk are already covered elsewhere.
+        Assert.Contains("\"name\":\"Name\"", json);
+        Assert.Contains("\"type\":\"nvarchar\"", json);
+        Assert.Contains("\"nullable\":true", json);
+        Assert.Contains("\"position\":3", json);
+        Assert.Contains("\"caption\":\"Customer Name\"", json);
+    }
 }
