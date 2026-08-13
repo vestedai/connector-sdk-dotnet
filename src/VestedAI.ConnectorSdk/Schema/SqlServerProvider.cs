@@ -7,7 +7,21 @@ namespace VestedAI.ConnectorSdk.Schema;
 /// Builds the canonical model for Microsoft SQL Server hosting Business
 /// Central / LS Central.
 /// </summary>
-public sealed class SqlServerProvider : IRelationalSchemaProvider
+/// <remarks>
+/// Deliberately not <c>sealed</c>. A connector declares its relational source
+/// with <c>[RelationalSource]</c>, and that declaration names ITS OWN tool keys,
+/// so it cannot live on this SDK-owned class. Subclassing is what lets a
+/// connector annotate this provider without re-implementing it:
+/// <code>
+/// [RelationalSource(Engine = "sqlserver", DescribeTool = "erp_bc.describe_schema",
+///                   QueryTool = "erp_bc.query_sql", SqlArg = "Sql")]
+/// public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
+/// </code>
+/// Every method here is non-virtual, so a subclass inherits the behaviour whole
+/// and can change none of it — unsealing widens what can be declared, not what
+/// can be overridden.
+/// </remarks>
+public class SqlServerProvider : IRelationalSchemaProvider
 {
     private readonly ICatalogReader _reader;
 

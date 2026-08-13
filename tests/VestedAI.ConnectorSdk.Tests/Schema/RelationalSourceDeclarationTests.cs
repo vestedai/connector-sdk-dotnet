@@ -11,6 +11,58 @@ using Xunit;
 namespace VestedAI.ConnectorSdk.Tests.Schema;
 
 // ---------------------------------------------------------------------------
+// The agent and the two tools a relational source points at. Build() now
+// cross-checks the declared tool keys and the SQL argument against these, so
+// the fixtures below name real tools — a connector's declaration that names
+// nothing real is itself a test case, further down.
+// ---------------------------------------------------------------------------
+
+[Agent(Key = "rs.demo", Name = "RelationalDemoAgent", Model = "openai:gpt-4o")]
+public class RelationalDemoAgent { }
+
+[Tool(Key = "rs.demo.describe_schema", Description = "Return the canonical schema.", Sensitivity = "read")]
+public class RelationalDescribeTool : ToolHandler<RelationalDescribeTool.Args, RelationalDescribeTool.Result>
+{
+    public class Args { public string Scope { get; set; } = ""; public string Part { get; set; } = ""; }
+    public class Result { public int RowCount { get; set; } }
+
+    public override Task<Result> HandleAsync(Args args, ToolContext ctx)
+        => Task.FromResult(new Result { RowCount = 0 });
+}
+
+[Tool(Key = "rs.demo.query_sql", Description = "Run SQL.", Sensitivity = "read")]
+public class RelationalQueryTool : ToolHandler<RelationalQueryTool.Args, RelationalQueryTool.Result>
+{
+    // "Sql" is the wire name: this SDK generates input schemas with the CLR
+    // property names, so the declaration's SqlArg must be "Sql", not "sql".
+    public class Args { public string Sql { get; set; } = ""; public string Scope { get; set; } = ""; }
+    public class Result { public int RowCount { get; set; } }
+
+    public override Task<Result> HandleAsync(Args args, ToolContext ctx)
+        => Task.FromResult(new Result { RowCount = 0 });
+}
+
+/// <summary>
+/// A query tool whose wire argument name differs from its CLR property name.
+/// Exists so a test can tell which of the two the host validates against.
+/// </summary>
+[Tool(Key = "rs.demo.query_renamed", Description = "Run SQL, renamed arg.", Sensitivity = "read")]
+public class RelationalRenamedQueryTool
+    : ToolHandler<RelationalRenamedQueryTool.Args, RelationalRenamedQueryTool.Result>
+{
+    public class Args
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("sql_text")]
+        public string Sql { get; set; } = "";
+    }
+
+    public class Result { public int RowCount { get; set; } }
+
+    public override Task<Result> HandleAsync(Args args, ToolContext ctx)
+        => Task.FromResult(new Result { RowCount = 0 });
+}
+
+// ---------------------------------------------------------------------------
 // Fixtures — providers decorated with [RelationalSource].
 //
 // Each returns a distinguishing scope name from ScopesAsync so a test can prove
@@ -21,22 +73,16 @@ namespace VestedAI.ConnectorSdk.Tests.Schema;
 /// <summary>Default-constructible provider — the SDK builds this one itself.</summary>
 [RelationalSource(
     Engine = "sqlserver",
-    DescribeTool = "erp_bc.describe_schema",
-    QueryTool = "erp_bc.query_sql",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
     SqlArg = "Sql")]
-public sealed class FixtureRelationalProvider : IRelationalSchemaProvider
+public sealed class FixtureRelationalProvider : FixtureProviderBase
 {
     /// <summary>Marker returned by <see cref="ScopesAsync"/>.</summary>
     public const string Marker = "activated-by-sdk";
 
-    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+    public override Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<string>>(new[] { Marker });
-
-    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
-        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
-
-    public Task<string> CatalogFingerprintAsync(CancellationToken ct)
-        => Task.FromResult("fixture-fingerprint");
 }
 
 /// <summary>
@@ -46,93 +92,118 @@ public sealed class FixtureRelationalProvider : IRelationalSchemaProvider
 /// </summary>
 [RelationalSource(
     Engine = "mysql",
-    DescribeTool = "shop.describe_schema",
-    QueryTool = "shop.query_sql",
-    SqlArg = "sql")]
-public sealed class FixtureDependencyProvider : IRelationalSchemaProvider
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class FixtureDependencyProvider : FixtureProviderBase
 {
     private readonly string _scope;
 
     public FixtureDependencyProvider(string scope) => _scope = scope;
 
-    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+    public override Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<string>>(new[] { _scope });
-
-    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
-        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
-
-    public Task<string> CatalogFingerprintAsync(CancellationToken ct)
-        => Task.FromResult("dependency-fingerprint");
 }
 
 /// <summary>Second annotated provider — for the one-per-assembly rule.</summary>
 [RelationalSource(
     Engine = "mysql",
-    DescribeTool = "other.describe_schema",
-    QueryTool = "other.query_sql",
-    SqlArg = "sql")]
-public sealed class FixtureSecondRelationalProvider : IRelationalSchemaProvider
-{
-    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class FixtureSecondRelationalProvider : FixtureProviderBase { }
 
-    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
-        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
-
-    public Task<string> CatalogFingerprintAsync(CancellationToken ct)
-        => Task.FromResult("second-fingerprint");
-}
+/// <summary>
+/// The documented one-liner from <see cref="RelationalSourceAttribute"/>'s
+/// example: annotate a SUBCLASS of the SDK's own provider. If
+/// <see cref="SqlServerProvider"/> were sealed again, or the attribute were
+/// required somewhere else, this stops compiling — which is the point of having
+/// the documented shape exist as a compiled fixture.
+/// </summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class FixtureSubclassedProvider(ICatalogReader reader) : SqlServerProvider(reader);
 
 /// <summary>Decorated but does not implement the provider interface.</summary>
 [RelationalSource(
     Engine = "sqlserver",
-    DescribeTool = "bad.describe_schema",
-    QueryTool = "bad.query_sql",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
     SqlArg = "Sql")]
 public sealed class FixtureNotAProvider { }
 
-/// <summary>Every field blank — one per missing-field test, below.</summary>
-[RelationalSource(DescribeTool = "b.describe", QueryTool = "b.query", SqlArg = "Sql")]
+// --- Declarations that name something that does not exist -------------------
+
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schemaa",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class FixtureUnknownDescribeTool : FixtureProviderBase { }
+
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sqll",
+    SqlArg = "Sql")]
+public sealed class FixtureUnknownQueryTool : FixtureProviderBase { }
+
+/// <summary>
+/// The casing trap: a lowercase arg name on an SDK whose input schemas carry
+/// the CLR property names. Register would be accepted and the gate would read
+/// null forever.
+/// </summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "sql")]
+public sealed class FixtureWrongCaseSqlArg : FixtureProviderBase { }
+
+/// <summary>Declares the WIRE argument name — must be accepted.</summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_renamed",
+    SqlArg = "sql_text")]
+public sealed class FixtureWireNameSqlArg : FixtureProviderBase { }
+
+/// <summary>Declares the CLR property name — must be refused.</summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_renamed",
+    SqlArg = "Sql")]
+public sealed class FixtureClrNameSqlArg : FixtureProviderBase { }
+
+// --- Blank-field fixtures, one per required value ---------------------------
+
+[RelationalSource(DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql")]
 public sealed class FixtureMissingEngine : FixtureProviderBase { }
 
-[RelationalSource(Engine = "sqlserver", QueryTool = "b.query", SqlArg = "Sql")]
+[RelationalSource(Engine = "sqlserver", QueryTool = "rs.demo.query_sql", SqlArg = "Sql")]
 public sealed class FixtureMissingDescribeTool : FixtureProviderBase { }
 
-[RelationalSource(Engine = "sqlserver", DescribeTool = "b.describe", SqlArg = "Sql")]
+[RelationalSource(Engine = "sqlserver", DescribeTool = "rs.demo.describe_schema", SqlArg = "Sql")]
 public sealed class FixtureMissingQueryTool : FixtureProviderBase { }
 
-[RelationalSource(Engine = "sqlserver", DescribeTool = "b.describe", QueryTool = "b.query")]
+[RelationalSource(Engine = "sqlserver", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql")]
 public sealed class FixtureMissingSqlArg : FixtureProviderBase { }
 
-/// <summary>Shared no-op body for the rejection fixtures.</summary>
+/// <summary>Shared no-op body for the fixtures above.</summary>
 public abstract class FixtureProviderBase : IRelationalSchemaProvider
 {
-    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+    public virtual Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
     public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
         => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
 
     public Task<string> CatalogFingerprintAsync(CancellationToken ct)
-        => Task.FromResult("");
-}
-
-// ---------------------------------------------------------------------------
-// A valid agent+tool pair, so Build()'s tool-prefix validation is satisfied and
-// these tests fail for relational-source reasons only.
-// ---------------------------------------------------------------------------
-
-[Agent(Key = "rs.demo", Name = "RelationalDemoAgent", Model = "openai:gpt-4o")]
-public class RelationalDemoAgent { }
-
-[Tool(Key = "rs.demo.ping", Description = "Ping tool for relational-source tests.", Sensitivity = "read")]
-public class RelationalDemoPingTool : ToolHandler<RelationalDemoPingTool.Args, RelationalDemoPingTool.Result>
-{
-    public class Args { public string Message { get; set; } = ""; }
-    public class Result { public string Reply { get; set; } = ""; }
-
-    public override Task<Result> HandleAsync(Args args, ToolContext ctx)
-        => Task.FromResult(new Result { Reply = args.Message });
+        => Task.FromResult("fixture-fingerprint");
 }
 
 // ---------------------------------------------------------------------------
@@ -143,12 +214,19 @@ public class RelationalSourceDeclarationTests
 {
     private static readonly FakeAssembly _declaringAssembly = new FakeAssembly(
         typeof(RelationalDemoAgent),
-        typeof(RelationalDemoPingTool),
+        typeof(RelationalDescribeTool),
+        typeof(RelationalQueryTool),
         typeof(FixtureRelationalProvider));
 
     private static readonly FakeAssembly _silentAssembly = new FakeAssembly(
         typeof(RelationalDemoAgent),
-        typeof(RelationalDemoPingTool));
+        typeof(RelationalDescribeTool),
+        typeof(RelationalQueryTool));
+
+    /// <summary>The demo agent and its two tools, plus whatever else is needed.</summary>
+    private static FakeAssembly AssemblyWith(params Type[] extra) => new FakeAssembly(
+        new[] { typeof(RelationalDemoAgent), typeof(RelationalDescribeTool), typeof(RelationalQueryTool) }
+            .Concat(extra).ToArray());
 
     // -----------------------------------------------------------------------
     // The declaration reaches the app with the exact declared values.
@@ -162,8 +240,8 @@ public class RelationalSourceDeclarationTests
 
         Assert.NotNull(app.RelationalSource);
         Assert.Equal("sqlserver", app.RelationalSource!.Engine);
-        Assert.Equal("erp_bc.describe_schema", app.RelationalSource.DescribeTool);
-        Assert.Equal("erp_bc.query_sql", app.RelationalSource.QueryTool);
+        Assert.Equal("rs.demo.describe_schema", app.RelationalSource.DescribeTool);
+        Assert.Equal("rs.demo.query_sql", app.RelationalSource.QueryTool);
         Assert.Equal("Sql", app.RelationalSource.SqlArg);
         Assert.Equal(typeof(FixtureRelationalProvider), app.RelationalSource.ProviderType);
     }
@@ -213,9 +291,9 @@ public class RelationalSourceDeclarationTests
 
         Assert.NotNull(app.RelationalSource);
         Assert.Equal("mysql", app.RelationalSource!.Engine);
-        Assert.Equal("shop.describe_schema", app.RelationalSource.DescribeTool);
-        Assert.Equal("shop.query_sql", app.RelationalSource.QueryTool);
-        Assert.Equal("sql", app.RelationalSource.SqlArg);
+        Assert.Equal("rs.demo.describe_schema", app.RelationalSource.DescribeTool);
+        Assert.Equal("rs.demo.query_sql", app.RelationalSource.QueryTool);
+        Assert.Equal("Sql", app.RelationalSource.SqlArg);
         Assert.Equal(typeof(FixtureDependencyProvider), app.RelationalSource.ProviderType);
 
         var scopes = await app.RelationalSchemaProvider!.ScopesAsync(CancellationToken.None);
@@ -223,7 +301,7 @@ public class RelationalSourceDeclarationTests
     }
 
     [Fact]
-    public async Task UseRelationalSchemaProvider_OverridesTheScannedType()
+    public void UseRelationalSchemaProvider_OverridesTheScannedType()
     {
         // Same declared type, but the constructed instance must be the one the
         // caller supplied — otherwise a provider holding a live connection is
@@ -236,26 +314,59 @@ public class RelationalSourceDeclarationTests
             .Build();
 
         Assert.Same(supplied, app.RelationalSchemaProvider);
-        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task UseRelationalSchemaProvider_SubclassOfSqlServerProvider_IsAccepted()
+    {
+        // The exact shape the attribute's <example> documents. It is only
+        // possible because SqlServerProvider is not sealed; a connector cannot
+        // annotate the SDK's class, but it can annotate a one-line subclass.
+        var supplied = new FixtureSubclassedProvider(new FakeCatalog());
+
+        var app = ConnectorHost.CreateBuilder()
+            .ScanAssembly(_silentAssembly)
+            .UseRelationalSchemaProvider(supplied)
+            .Build();
+
+        Assert.Same(supplied, app.RelationalSchemaProvider);
+        Assert.Equal("sqlserver", app.RelationalSource!.Engine);
+
+        // Inherited behaviour still works through the subclass.
+        var scopes = await app.RelationalSchemaProvider!.ScopesAsync(CancellationToken.None);
+        Assert.Empty(scopes);
+    }
+
+    [Fact]
+    public void UseRelationalSchemaProvider_UnannotatedSdkProvider_NamesTheRemedy()
+    {
+        // The documented failure: handing over a bare SqlServerProvider. The
+        // message must send the author to their OWN assembly, not to a type
+        // they did not write.
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(_silentAssembly)
+                .UseRelationalSchemaProvider(new SqlServerProvider(new FakeCatalog())));
+
+        Assert.Contains(nameof(SqlServerProvider), ex.Message);
+        Assert.Contains("your own assembly", ex.Message);
+        Assert.Contains("Subclass", ex.Message);
     }
 
     [Fact]
     public void Build_ProviderWithoutParameterlessCtor_AndNoInstance_Throws()
     {
-        var asm = new FakeAssembly(
-            typeof(RelationalDemoAgent),
-            typeof(RelationalDemoPingTool),
-            typeof(FixtureDependencyProvider));
-
         var ex = Assert.Throws<ConnectorException>(
-            () => ConnectorHost.CreateBuilder().ScanAssembly(asm).Build());
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(FixtureDependencyProvider)))
+                .Build());
 
         Assert.Contains(nameof(FixtureDependencyProvider), ex.Message);
         Assert.Contains("UseRelationalSchemaProvider", ex.Message);
     }
 
     [Fact]
-    public void UseRelationalSchemaProvider_ConflictsWithScannedType_Throws()
+    public void UseRelationalSchemaProvider_ConflictsWithScannedType_SaysScanned()
     {
         var ex = Assert.Throws<ConnectorException>(
             () => ConnectorHost.CreateBuilder()
@@ -264,6 +375,115 @@ public class RelationalSourceDeclarationTests
 
         Assert.Contains(nameof(FixtureRelationalProvider), ex.Message);
         Assert.Contains(nameof(FixtureDependencyProvider), ex.Message);
+        Assert.Contains("already scanned", ex.Message);
+    }
+
+    [Fact]
+    public void UseRelationalSchemaProvider_ConflictsWithSuppliedType_SaysSupplied()
+    {
+        // Provenance matters: telling the operator the other one was "scanned"
+        // sends them to grep an assembly that is perfectly fine.
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(_silentAssembly)
+                .UseRelationalSchemaProvider(new FixtureDependencyProvider("company-a"))
+                .UseRelationalSchemaProvider(new FixtureSubclassedProvider(new FakeCatalog())));
+
+        Assert.Contains("already supplied to UseRelationalSchemaProvider", ex.Message);
+        Assert.DoesNotContain("already scanned", ex.Message);
+    }
+
+    // -----------------------------------------------------------------------
+    // Build() cross-checks the declaration against the tools that exist.
+    //
+    // Nothing downstream does: the core validates non-emptiness and a namespace
+    // prefix only, so a typo'd key or a mis-cased arg name registers CLEANLY and
+    // the gate then governs a tool nothing answers to while the real query tool
+    // runs ungoverned.
+
+    [Fact]
+    public void Build_DescribeToolNotDeclared_Throws()
+    {
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(FixtureUnknownDescribeTool)))
+                .Build());
+
+        Assert.Contains("DescribeTool", ex.Message);
+        Assert.Contains("rs.demo.describe_schemaa", ex.Message);
+        // The message lists what IS declared, so the typo is visible side by side.
+        Assert.Contains("rs.demo.describe_schema,", ex.Message);
+    }
+
+    [Fact]
+    public void Build_QueryToolNotDeclared_Throws()
+    {
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(FixtureUnknownQueryTool)))
+                .Build());
+
+        Assert.Contains("QueryTool", ex.Message);
+        Assert.Contains("rs.demo.query_sqll", ex.Message);
+        // The trailing ")" matters: "rs.demo.query_sqll" contains the real key
+        // as a prefix, so asserting the bare key would pass on the typo alone.
+        Assert.Contains("rs.demo.query_sql)", ex.Message);
+    }
+
+    [Fact]
+    public void Build_SqlArgIsNotAnArgumentOfTheQueryTool_Throws()
+    {
+        // Lowercase "sql" against an input schema that carries "Sql".
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(FixtureWrongCaseSqlArg)))
+                .Build());
+
+        Assert.Contains("SqlArg 'sql'", ex.Message);
+        Assert.Contains("rs.demo.query_sql", ex.Message);
+        Assert.Contains("including case", ex.Message);
+
+        // Names the arguments the tool really takes, so the casing fix is
+        // obvious. Asserted on the list itself — "Sql" also occurs inside
+        // "SqlArg", so a bare Contains would pass without any list at all.
+        Assert.Contains("arguments are: ", ex.Message);
+        var listed = ex.Message[(ex.Message.IndexOf("arguments are: ", StringComparison.Ordinal)
+                                 + "arguments are: ".Length)..];
+        Assert.Contains("Sql", listed);
+        Assert.Contains("Scope", listed);
+    }
+
+    [Fact]
+    public void Build_SqlArg_ResolvesAgainstTheWireSchema_NotClrPropertyNames()
+    {
+        // The gate reads the argument the CALLER sent, whose name comes from the
+        // input schema — not from the CLR property. Where the two diverge, a
+        // reflection-based check would accept a declaration that reads null at
+        // gate time and authorizes an empty string. This pins which one is used.
+        var decl = DeclarationFactory.FromToolType(typeof(RelationalRenamedQueryTool));
+        using var doc = System.Text.Json.JsonDocument.Parse(decl.InputSchemaJson);
+        var props = doc.RootElement.GetProperty("properties");
+
+        // Precondition — without a real divergence this test proves nothing.
+        Assert.True(props.TryGetProperty("sql_text", out _),
+            "expected the wire name 'sql_text' in the generated schema");
+        Assert.False(props.TryGetProperty("Sql", out _),
+            "expected the CLR name 'Sql' NOT to appear in the generated schema");
+
+        // The wire name is accepted.
+        var app = ConnectorHost.CreateBuilder()
+            .ScanAssembly(AssemblyWith(typeof(RelationalRenamedQueryTool), typeof(FixtureWireNameSqlArg)))
+            .Build();
+        Assert.Equal("sql_text", app.RelationalSource!.SqlArg);
+
+        // The CLR name is refused — this is the case a reflection-based check
+        // would have waved through.
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(RelationalRenamedQueryTool), typeof(FixtureClrNameSqlArg)))
+                .Build());
+
+        Assert.Contains("SqlArg 'Sql'", ex.Message);
     }
 
     // -----------------------------------------------------------------------
@@ -276,8 +496,8 @@ public class RelationalSourceDeclarationTests
 
         Assert.NotNull(relational);
         Assert.Equal("sqlserver", relational!.Engine);
-        Assert.Equal("erp_bc.describe_schema", relational.DescribeTool);
-        Assert.Equal("erp_bc.query_sql", relational.QueryTool);
+        Assert.Equal("rs.demo.describe_schema", relational.DescribeTool);
+        Assert.Equal("rs.demo.query_sql", relational.QueryTool);
         Assert.Equal("Sql", relational.SqlArg);
         Assert.Equal(typeof(FixtureRelationalProvider), relational.ProviderType);
     }
@@ -292,8 +512,8 @@ public class RelationalSourceDeclarationTests
     [Fact]
     public void ScanAssembly_TwoRelationalSources_ThrowsConnectorException()
     {
-        // One connector fronts one relational source: two declarations would
-        // leave the platform guessing which query tool the SQL gate governs.
+        // One connector fronts one relational source: two would leave the
+        // platform guessing which query tool the SQL gate governs.
         var asm = new FakeAssembly(
             typeof(FixtureRelationalProvider),
             typeof(FixtureSecondRelationalProvider));

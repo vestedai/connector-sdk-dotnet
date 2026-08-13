@@ -13,18 +13,53 @@ namespace VestedAI.ConnectorSdk.Schema;
 /// Apply once per assembly.
 /// </summary>
 /// <remarks>
-/// The class this sits on is the one the SDK will construct when no instance is
+/// <para>
+/// This attribute must sit on a class in YOUR connector's assembly. Everything
+/// it declares — the engine, the two tool keys, the SQL argument name — is
+/// specific to your connector, so it cannot live on an SDK-owned provider:
+/// <see cref="SqlServerProvider"/> deliberately carries no
+/// <c>[RelationalSource]</c> of its own, and handing a bare
+/// <c>new SqlServerProvider(...)</c> to
+/// <c>ConnectorHostBuilder.UseRelationalSchemaProvider</c> is refused at startup
+/// for exactly that reason. Subclass it and annotate the subclass — it is not
+/// sealed, and its methods are non-virtual, so the one-liner below inherits the
+/// whole implementation.
+/// </para>
+/// <para>
+/// The class this sits on is the one the SDK constructs when no instance is
 /// supplied. A provider with constructor dependencies (a connection factory, a
-/// catalog reader — <see cref="SqlServerProvider"/> and every realistic one) is
-/// handed to <c>ConnectorHostBuilder.UseRelationalSchemaProvider</c> ready-made
-/// instead; the attribute on its class still supplies the declaration.
-///
+/// catalog reader — every realistic one) is handed to
+/// <c>UseRelationalSchemaProvider</c> ready-made instead; the attribute on its
+/// class still supplies the declaration.
+/// </para>
+/// <para>
 /// There is deliberately no fingerprint here. The catalog fingerprint is read
 /// live from the provider at register time — a value captured when the assembly
 /// was scanned would be stale the moment the source catalog changed, and a
 /// stale fingerprint tells the core "nothing changed, do not re-extract", which
 /// is precisely the silently-wrong-schema failure this layer exists to prevent.
+/// </para>
 /// </remarks>
+/// <example>
+/// Annotate a subclass of the SDK's provider, then hand the host a ready-made
+/// instance. <c>DescribeTool</c> and <c>QueryTool</c> must name tools this
+/// connector actually declares, and <c>SqlArg</c> must name an argument of the
+/// query tool — the host checks all three at startup.
+/// <code>
+/// [RelationalSource(Engine = "sqlserver",
+///                   DescribeTool = "erp_bc.describe_schema",
+///                   QueryTool = "erp_bc.query_sql",
+///                   SqlArg = "Sql")]
+/// public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
+///
+/// // Program.cs
+/// return await ConnectorHost.CreateBuilder()
+///     .ScanAssembly(Assembly.GetExecutingAssembly())
+///     .UseRelationalSchemaProvider(new BcSchemaProvider(catalogReader))
+///     .Build()
+///     .RunFromEnvironmentAsync();
+/// </code>
+/// </example>
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class RelationalSourceAttribute : Attribute
 {

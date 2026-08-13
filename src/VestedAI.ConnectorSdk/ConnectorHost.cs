@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json.Nodes;
 using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
@@ -45,6 +46,7 @@ public sealed class ConnectorHostBuilder
     private string[]? _credentialKeys;
     private RelationalSourceDeclaration? _relationalSource;
     private IRelationalSchemaProvider? _relationalProvider;
+    private bool _relationalSourceWasScanned;
 
     /// <summary>
     /// Scans <paramref name="asm"/> for <c>[Agent]</c> and <c>[Tool]</c> types and
@@ -62,14 +64,21 @@ public sealed class ConnectorHostBuilder
             if (_relationalSource is not null &&
                 _relationalSource.ProviderType != relationalSource.ProviderType)
             {
+                // Same reason as in UseRelationalSchemaProvider: say where the
+                // other one came from, so the operator looks in the right place.
+                var origin = _relationalSourceWasScanned
+                    ? "found across assemblies"
+                    : "declared twice — one supplied to UseRelationalSchemaProvider, one scanned";
+
                 throw new ConnectorException(
-                    $"Two relational sources found across assemblies: " +
+                    $"Two relational sources {origin}: " +
                     $"{_relationalSource.ProviderType.FullName} and " +
                     $"{relationalSource.ProviderType.FullName}. " +
                     "A connector may declare only one.");
             }
 
             _relationalSource = relationalSource;
+            _relationalSourceWasScanned = true;
         }
 
         if (credential is not null)
@@ -165,27 +174,63 @@ public sealed class ConnectorHostBuilder
     /// Supplies a ready-made relational schema provider instead of letting the
     /// SDK construct the scanned <c>[RelationalSource]</c> type. Use it when the
     /// provider takes constructor dependencies (a connection factory, a catalog
-    /// reader — every realistic one does, including
-    /// <see cref="SqlServerProvider"/>); the <c>[RelationalSource]</c> attribute
-    /// on its class still supplies the declaration.
+    /// reader — every realistic one does).
     /// </summary>
+    /// <remarks>
+    /// The instance must be of a class in your own assembly carrying
+    /// <c>[RelationalSource]</c>: the declaration names your connector's tool
+    /// keys, so it cannot live on an SDK-owned provider.
+    /// <see cref="SqlServerProvider"/> therefore carries none — subclass it and
+    /// annotate the subclass (it is not sealed):
+    /// <code>
+    /// [RelationalSource(Engine = "sqlserver", DescribeTool = "erp_bc.describe_schema",
+    ///                   QueryTool = "erp_bc.query_sql", SqlArg = "Sql")]
+    /// public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
+    /// </code>
+    /// </remarks>
     /// <exception cref="ConnectorException">
-    /// Thrown when a different <c>[RelationalSource]</c> type was already scanned.
+    /// Thrown when the supplied instance's class carries no
+    /// <c>[RelationalSource]</c>, or when a different <c>[RelationalSource]</c>
+    /// type was already declared.
     /// </exception>
     public ConnectorHostBuilder UseRelationalSchemaProvider(IRelationalSchemaProvider provider)
     {
-        var declared = DeclarationFactory.FromRelationalSourceType(provider.GetType());
+        var providerType = provider.GetType();
+
+        // Checked here rather than left to the factory so the message can name
+        // the remedy. The failure is otherwise baffling: the type it points at
+        // is a sealed-looking SDK class the connector author did not write and
+        // cannot annotate, with no hint that the fix lives in their assembly.
+        if (providerType.GetCustomAttributes(typeof(RelationalSourceAttribute), inherit: false).Length == 0)
+        {
+            throw new ConnectorException(
+                $"UseRelationalSchemaProvider was given {providerType.FullName}, which carries no " +
+                "[RelationalSource] attribute. The declaration names THIS connector's engine, tool " +
+                "keys and SQL argument, so it must live on a class in your own assembly — the SDK's " +
+                "own providers carry none. Subclass one and annotate the subclass, e.g. " +
+                "[RelationalSource(...)] public sealed class MyProvider(ICatalogReader r) : SqlServerProvider(r);");
+        }
+
+        var declared = DeclarationFactory.FromRelationalSourceType(providerType);
 
         if (_relationalSource is not null &&
             _relationalSource.ProviderType != declared.ProviderType)
         {
+            // Name where the OTHER declaration came from. Saying "already
+            // scanned" when it was in fact supplied by an earlier call sends the
+            // operator off to grep an assembly that is perfectly fine.
+            var origin = _relationalSourceWasScanned
+                ? "was already scanned"
+                : "was already supplied to UseRelationalSchemaProvider";
+
             throw new ConnectorException(
                 $"UseRelationalSchemaProvider supplied {declared.ProviderType.FullName} but " +
-                $"{_relationalSource.ProviderType.FullName} was already scanned. " +
+                $"{_relationalSource.ProviderType.FullName} {origin}. " +
                 "A connector may declare only one relational source.");
         }
 
         _relationalSource = declared;
+        _relationalSourceWasScanned = false;
         _relationalProvider = provider;
         return this;
     }
@@ -195,7 +240,9 @@ public sealed class ConnectorHostBuilder
     /// </summary>
     /// <exception cref="ConnectorException">
     /// Thrown when a tool key does not start with any registered agent key followed
-    /// by a dot, or when a credential handler is declared without a private key.
+    /// by a dot, when a credential handler is declared without a private key, or
+    /// when a declared relational source names a tool this connector does not
+    /// declare or an argument its query tool does not take.
     /// </exception>
     public ConnectorApp Build()
     {
@@ -242,6 +289,8 @@ public sealed class ConnectorHostBuilder
 
         if (_relationalSource is not null)
         {
+            ValidateRelationalSourceTools(_relationalSource, _tools);
+
             if (_relationalProvider is null &&
                 _relationalSource.ProviderType.GetConstructor(Type.EmptyTypes) is null)
             {
@@ -308,5 +357,96 @@ public sealed class ConnectorHostBuilder
                     $"(key must start with '<agentKey>.')");
             }
         }
+    }
+
+    /// <summary>
+    /// Cross-checks a relational source against the tools the connector actually
+    /// declares: both tool keys must exist, and <c>SqlArg</c> must name an
+    /// argument of the query tool.
+    /// </summary>
+    /// <remarks>
+    /// Nothing downstream catches these. The core validates
+    /// <c>relational_source</c> for non-emptiness and a namespace prefix only
+    /// (<c>ConnectorRegistryService::validateRelationalSource</c>) — it cannot
+    /// know which tools exist or what arguments they take. So a one-character
+    /// typo in <c>QueryTool</c>, or an <c>SqlArg</c> whose casing does not match
+    /// the generated input schema, is ACCEPTED at registration: the gate then
+    /// governs a tool key nothing answers to and reads an argument that is
+    /// always null — authorizing an empty string — while the real query tool
+    /// runs ungoverned. That is silent, and it is the failure this layer exists
+    /// to prevent, so it is refused at startup instead.
+    /// </remarks>
+    private static void ValidateRelationalSourceTools(
+        RelationalSourceDeclaration source,
+        IReadOnlyDictionary<string, ToolDeclaration> tools)
+    {
+        if (!tools.ContainsKey(source.DescribeTool))
+        {
+            throw new ConnectorException(
+                $"relational source declares DescribeTool '{source.DescribeTool}' " +
+                $"but this connector declares no such tool " +
+                $"(declared tools: {DescribeToolKeys(tools)})");
+        }
+
+        if (!tools.TryGetValue(source.QueryTool, out var queryTool))
+        {
+            throw new ConnectorException(
+                $"relational source declares QueryTool '{source.QueryTool}' " +
+                $"but this connector declares no such tool " +
+                $"(declared tools: {DescribeToolKeys(tools)})");
+        }
+
+        var argNames = WireArgumentNames(queryTool);
+
+        if (!argNames.Contains(source.SqlArg, StringComparer.Ordinal))
+        {
+            throw new ConnectorException(
+                $"relational source declares SqlArg '{source.SqlArg}' but tool " +
+                $"'{source.QueryTool}' has no such argument " +
+                $"(its arguments are: {(argNames.Count == 0 ? "none" : string.Join(", ", argNames))}). " +
+                "The name must match the tool's input schema exactly, including case.");
+        }
+    }
+
+    private static string DescribeToolKeys(IReadOnlyDictionary<string, ToolDeclaration> tools)
+        => tools.Count == 0 ? "none" : string.Join(", ", tools.Keys.OrderBy(k => k, StringComparer.Ordinal));
+
+    /// <summary>
+    /// The argument names of a tool as they appear ON THE WIRE.
+    /// </summary>
+    /// <remarks>
+    /// Read from the generated <c>InputSchemaJson</c>, never from the CLR
+    /// properties of <c>ArgsType</c>. The two can differ — a JSON naming policy
+    /// or a <c>[JsonPropertyName]</c> renames the wire field while the CLR
+    /// property keeps its own name — and the wire name is the one that matters:
+    /// it is what the schema advertises, what the caller sends, and therefore
+    /// what the core's SQL gate looks up. Validating against CLR names would
+    /// accept a declaration that reads null at gate time, which is the exact bug
+    /// this check exists to catch.
+    /// </remarks>
+    private static IReadOnlyList<string> WireArgumentNames(ToolDeclaration tool)
+    {
+        if (JsonNode.Parse(tool.InputSchemaJson) is not JsonObject root)
+        {
+            return Array.Empty<string>();
+        }
+
+        // NJsonSchema emits an object root with inline `properties` for a POCO
+        // args type (asserted by InheritedArgsSchemaTests, which covers the
+        // hardest case — a flattened inheritance hierarchy). A root `$ref` into
+        // `definitions` is resolved one level anyway: guessing wrong here would
+        // reject a valid connector at startup.
+        if (!root.ContainsKey("properties")
+            && root["$ref"]?.GetValue<string>() is { } reference
+            && reference.StartsWith("#/definitions/", StringComparison.Ordinal)
+            && root["definitions"] is JsonObject definitions
+            && definitions[reference["#/definitions/".Length..]] is JsonObject target)
+        {
+            root = target;
+        }
+
+        return root["properties"] is JsonObject properties
+            ? properties.Select(p => p.Key).ToList()
+            : Array.Empty<string>();
     }
 }

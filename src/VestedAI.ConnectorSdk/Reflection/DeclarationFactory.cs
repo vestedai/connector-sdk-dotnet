@@ -228,6 +228,17 @@ public static class DeclarationFactory
 
         // Each message names the blank field: an operator reading a crash log
         // otherwise learns only that "something" was left out.
+        //
+        // Engine is checked for emptiness ONLY — deliberately no allowlist, and
+        // not an oversight of the CredentialKinds.All parity above. The core
+        // owns the set of supported engines and already rejects an unknown one
+        // at first connect (ConnectorRegistryService::validateRelationalSource →
+        // issue "relational_engine_unsupported", whose message names the allowed
+        // set; Daemon prints every issue and exits 78). That diagnostic is
+        // strictly better than one from here, and it ships with the core that
+        // added the engine. An SDK-side copy of the list would instead refuse to
+        // start a valid connector until the SDK is re-released — the SDK would
+        // become the thing blocking an engine the platform already supports.
         RequireValue(t, nameof(RelationalSourceAttribute.Engine), sourceAttr.Engine,
             "the database engine behind this connector, e.g. \"sqlserver\"");
         RequireValue(t, nameof(RelationalSourceAttribute.DescribeTool), sourceAttr.DescribeTool,
