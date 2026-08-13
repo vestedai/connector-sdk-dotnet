@@ -2,6 +2,7 @@ using Google.Protobuf;
 using Vested.V1;
 using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
+using VestedAI.ConnectorSdk.Schema;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk.Runtime;
@@ -87,7 +88,7 @@ internal sealed class Daemon
                 $"max_concurrent={ack.MaxConcurrentToolCalls}");
 
             // 3. Register
-            var registerMsg = BuildRegister();
+            var registerMsg = await BuildRegisterAsync(ct).ConfigureAwait(false);
             await _client.SendAsync(registerMsg).ConfigureAwait(false);
 
             // 4. RegisterAck
@@ -199,7 +200,12 @@ internal sealed class Daemon
         return 0;
     }
 
-    private ConnectorMsg BuildRegister()
+    /// <summary>
+    /// Builds the <c>Register</c> message. Asynchronous because the relational
+    /// source's catalog fingerprint is read LIVE from the provider here — never
+    /// captured at scan time, where it would be stale by the time it is sent.
+    /// </summary>
+    private async Task<ConnectorMsg> BuildRegisterAsync(CancellationToken ct)
     {
         // CRITICAL: baseline_fingerprint MUST be non-empty — the hub's in-memory
         // store starts at "" so an empty fingerprint short-circuits "accepted"
@@ -262,7 +268,70 @@ internal sealed class Daemon
         if (_app.CredentialSchema is not null)
             reg.CredentialSchema = ToProto(_app.CredentialSchema);
 
+        // Same contract, one field over: absent when the connector fronts no
+        // relational database, which is what tells the platform never to
+        // extract a schema for it or gate a query tool it does not have.
+        if (_app.RelationalSource is not null)
+        {
+            reg.RelationalSource = await ToProtoAsync(
+                _app.RelationalSource, _app.RelationalSchemaProvider, ct).ConfigureAwait(false);
+        }
+
         return new ConnectorMsg { Register = reg };
+    }
+
+    /// <summary>
+    /// Maps a <see cref="RelationalSourceDeclaration"/> to its proto
+    /// representation, reading the catalog fingerprint from
+    /// <paramref name="provider"/> as the message is built.
+    /// </summary>
+    /// <param name="warn">
+    /// Where the fingerprint-unavailable warning goes. Defaults to stderr;
+    /// tests pass a sink so the message can be asserted without touching
+    /// process-global <see cref="Console"/> state.
+    /// </param>
+    internal static async Task<RelationalSourceDecl> ToProtoAsync(
+        RelationalSourceDeclaration d,
+        IRelationalSchemaProvider? provider,
+        CancellationToken ct,
+        Action<string>? warn = null)
+    {
+        var decl = new RelationalSourceDecl
+        {
+            Engine       = d.Engine,
+            DescribeTool = d.DescribeTool,
+            QueryTool    = d.QueryTool,
+            SqlArg       = d.SqlArg,
+            Fingerprint  = "",
+        };
+
+        // Build() constructs a provider for every declaration it accepts, so
+        // this is unreachable in practice — but losing the whole declaration to
+        // a NullReferenceException is exactly the silent disablement below.
+        if (provider is null) return decl;
+
+        try
+        {
+            decl.Fingerprint = await provider.CatalogFingerprintAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // DELIBERATE: emit the declaration anyway, with an empty
+            // fingerprint. A source database that is unreachable at connector
+            // startup is normal and transient. An empty fingerprint makes the
+            // core re-extract — expensive, but correct and visible in its own
+            // logs. Omitting the declaration instead would silently disable
+            // schema extraction AND the SQL gate for the whole session, with
+            // nothing anywhere reporting that governance had stopped. Silent
+            // disablement is the failure class this declaration exists to
+            // close, so it must never be the response to a transient error.
+            (warn ?? Console.Error.WriteLine)(
+                $"[vested] catalog fingerprint unavailable for relational source " +
+                $"'{d.QueryTool}'; registering with an empty fingerprint, which makes the " +
+                $"platform re-extract the schema: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        return decl;
     }
 
     /// <summary>Maps a <see cref="CredentialDeclaration"/> to its proto representation.</summary>
