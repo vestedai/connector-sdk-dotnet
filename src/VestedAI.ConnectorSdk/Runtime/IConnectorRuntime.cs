@@ -1,5 +1,6 @@
 using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Credential;
+using VestedAI.ConnectorSdk.Schema;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk.Runtime;
@@ -28,4 +29,18 @@ internal interface IConnectorRuntime
     /// no credential schema is declared.
     /// </summary>
     CredentialOpener? CredentialOpener { get; }
+
+    /// <summary>
+    /// The declared relational source, or null when this connector fronts no
+    /// database. Null keeps <c>Register.relational_source</c> absent, which is
+    /// what tells the platform never to extract a schema for this connector.
+    /// </summary>
+    RelationalSourceDeclaration? RelationalSource { get; }
+
+    /// <summary>
+    /// The connector's schema provider, or null when none is declared. The
+    /// catalog fingerprint reported on <c>Register</c> is read from this
+    /// instance at register time, never captured earlier.
+    /// </summary>
+    IRelationalSchemaProvider? RelationalSchemaProvider { get; }
 }

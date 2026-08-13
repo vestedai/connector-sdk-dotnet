@@ -1,6 +1,7 @@
 using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Runtime;
+using VestedAI.ConnectorSdk.Schema;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk;
@@ -29,6 +30,12 @@ public sealed class ConnectorApp : IConnectorRuntime
     /// <inheritdoc/>
     public CredentialOpener? CredentialOpener { get; }
 
+    /// <inheritdoc/>
+    public RelationalSourceDeclaration? RelationalSource { get; }
+
+    /// <inheritdoc/>
+    public IRelationalSchemaProvider? RelationalSchemaProvider { get; }
+
     private readonly bool _insecure;
 
     /// <summary>
@@ -40,7 +47,9 @@ public sealed class ConnectorApp : IConnectorRuntime
         bool insecure,
         CredentialDeclaration? credentialSchema = null,
         IUserCredentialHandler? credentialHandler = null,
-        CredentialOpener? credentialOpener = null)
+        CredentialOpener? credentialOpener = null,
+        RelationalSourceDeclaration? relationalSource = null,
+        IRelationalSchemaProvider? relationalSchemaProvider = null)
     {
         Agents = agents;
         Tools = tools;
@@ -48,6 +57,8 @@ public sealed class ConnectorApp : IConnectorRuntime
         CredentialSchema = credentialSchema;
         CredentialHandler = credentialHandler;
         CredentialOpener = credentialOpener;
+        RelationalSource = relationalSource;
+        RelationalSchemaProvider = relationalSchemaProvider;
     }
 
     /// <summary>

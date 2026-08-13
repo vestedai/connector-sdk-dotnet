@@ -4,6 +4,7 @@ using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
 using VestedAI.ConnectorSdk.Reflection;
 using VestedAI.ConnectorSdk.Runtime;
+using VestedAI.ConnectorSdk.Schema;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk;
@@ -27,8 +28,9 @@ public static class ConnectorHost
 
 /// <summary>
 /// Fluent builder that scans one or more assemblies for
-/// <c>[Agent]</c> / <c>[Tool]</c> / <c>[Credential]</c> decorated types,
-/// validates the declarations, and produces a <see cref="ConnectorApp"/>.
+/// <c>[Agent]</c> / <c>[Tool]</c> / <c>[Credential]</c> / <c>[RelationalSource]</c>
+/// decorated types, validates the declarations, and produces a
+/// <see cref="ConnectorApp"/>.
 /// </summary>
 public sealed class ConnectorHostBuilder
 {
@@ -41,6 +43,8 @@ public sealed class ConnectorHostBuilder
     private CredentialDeclaration? _credential;
     private IUserCredentialHandler? _credentialHandler;
     private string[]? _credentialKeys;
+    private RelationalSourceDeclaration? _relationalSource;
+    private IRelationalSchemaProvider? _relationalProvider;
 
     /// <summary>
     /// Scans <paramref name="asm"/> for <c>[Agent]</c> and <c>[Tool]</c> types and
@@ -51,7 +55,22 @@ public sealed class ConnectorHostBuilder
     /// </summary>
     public ConnectorHostBuilder ScanAssembly(Assembly asm)
     {
-        var (agents, tools, credential) = Scanner.ScanAssembly(asm);
+        var (agents, tools, credential, relationalSource) = Scanner.ScanAssembly(asm);
+
+        if (relationalSource is not null)
+        {
+            if (_relationalSource is not null &&
+                _relationalSource.ProviderType != relationalSource.ProviderType)
+            {
+                throw new ConnectorException(
+                    $"Two relational sources found across assemblies: " +
+                    $"{_relationalSource.ProviderType.FullName} and " +
+                    $"{relationalSource.ProviderType.FullName}. " +
+                    "A connector may declare only one.");
+            }
+
+            _relationalSource = relationalSource;
+        }
 
         if (credential is not null)
         {
@@ -143,6 +162,35 @@ public sealed class ConnectorHostBuilder
     }
 
     /// <summary>
+    /// Supplies a ready-made relational schema provider instead of letting the
+    /// SDK construct the scanned <c>[RelationalSource]</c> type. Use it when the
+    /// provider takes constructor dependencies (a connection factory, a catalog
+    /// reader — every realistic one does, including
+    /// <see cref="SqlServerProvider"/>); the <c>[RelationalSource]</c> attribute
+    /// on its class still supplies the declaration.
+    /// </summary>
+    /// <exception cref="ConnectorException">
+    /// Thrown when a different <c>[RelationalSource]</c> type was already scanned.
+    /// </exception>
+    public ConnectorHostBuilder UseRelationalSchemaProvider(IRelationalSchemaProvider provider)
+    {
+        var declared = DeclarationFactory.FromRelationalSourceType(provider.GetType());
+
+        if (_relationalSource is not null &&
+            _relationalSource.ProviderType != declared.ProviderType)
+        {
+            throw new ConnectorException(
+                $"UseRelationalSchemaProvider supplied {declared.ProviderType.FullName} but " +
+                $"{_relationalSource.ProviderType.FullName} was already scanned. " +
+                "A connector may declare only one relational source.");
+        }
+
+        _relationalSource = declared;
+        _relationalProvider = provider;
+        return this;
+    }
+
+    /// <summary>
     /// Validates the accumulated declarations and returns a <see cref="ConnectorApp"/>.
     /// </summary>
     /// <exception cref="ConnectorException">
@@ -188,13 +236,34 @@ public sealed class ConnectorHostBuilder
             opener = new CredentialOpener(keys);
         }
 
+        // Same shape: a connector that declares no relational source registers
+        // none, and the platform then never extracts its schema.
+        IRelationalSchemaProvider? provider = null;
+
+        if (_relationalSource is not null)
+        {
+            if (_relationalProvider is null &&
+                _relationalSource.ProviderType.GetConstructor(Type.EmptyTypes) is null)
+            {
+                throw new ConnectorException(
+                    $"Relational schema provider {_relationalSource.ProviderType.FullName} has no " +
+                    "parameterless constructor. Either add one, or pass a ready-made instance to " +
+                    "UseRelationalSchemaProvider(...).");
+            }
+
+            provider = _relationalProvider
+                       ?? (IRelationalSchemaProvider)Activator.CreateInstance(_relationalSource.ProviderType)!;
+        }
+
         return new ConnectorApp(
             _agents.AsReadOnly(),
             _tools,
             _insecure,
             _credential,
             handler,
-            opener);
+            opener,
+            _relationalSource,
+            provider);
     }
 
     // ---------------------------------------------------------------------------

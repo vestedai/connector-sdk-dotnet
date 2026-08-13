@@ -4,6 +4,7 @@ using NJsonSchema.Generation;
 using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
+using VestedAI.ConnectorSdk.Schema;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk.Reflection;
@@ -180,6 +181,77 @@ public static class DeclarationFactory
             HelpText:    credAttr.HelpText ?? "",
             Fields:      fields,
             HandlerType: t);
+    }
+
+    /// <summary>
+    /// Build a <see cref="RelationalSourceDeclaration"/> from a class decorated
+    /// with <see cref="RelationalSourceAttribute"/> that also implements
+    /// <see cref="IRelationalSchemaProvider"/>.
+    /// </summary>
+    /// <remarks>
+    /// Validation is strict and happens at startup rather than at registration,
+    /// for the same reason as the credential schema: a blank tool key or engine
+    /// would register a declaration the core cannot act on. That failure is
+    /// invisible — extraction simply never happens and the query gate governs
+    /// nothing — so it must surface as a refusal to start, not as silence.
+    /// </remarks>
+    /// <exception cref="ConnectorException">
+    /// Thrown when <c>[RelationalSource]</c> is missing, the type is abstract or
+    /// does not implement <see cref="IRelationalSchemaProvider"/>, or any of
+    /// <c>Engine</c>, <c>DescribeTool</c>, <c>QueryTool</c> and <c>SqlArg</c> is
+    /// blank.
+    /// </exception>
+    public static RelationalSourceDeclaration FromRelationalSourceType(Type t)
+    {
+        var sourceAttr = t.GetCustomAttributes(typeof(RelationalSourceAttribute), inherit: false)
+                          .Cast<RelationalSourceAttribute>()
+                          .FirstOrDefault()
+                     ?? throw new ConnectorException(
+                            $"Type {t.FullName} is missing the [RelationalSource] attribute.");
+
+        if (!typeof(IRelationalSchemaProvider).IsAssignableFrom(t))
+        {
+            throw new ConnectorException(
+                $"Type {t.FullName} is decorated with [RelationalSource] but does not implement " +
+                $"{nameof(IRelationalSchemaProvider)}.");
+        }
+
+        // The parameterless-constructor requirement is enforced in Build(), and
+        // only when the SDK has to construct the provider itself — a provider
+        // holding a connection factory is supplied ready-made via
+        // UseRelationalSchemaProvider.
+        if (t.IsAbstract)
+        {
+            throw new ConnectorException(
+                $"Relational schema provider {t.FullName} must be a concrete class.");
+        }
+
+        // Each message names the blank field: an operator reading a crash log
+        // otherwise learns only that "something" was left out.
+        RequireValue(t, nameof(RelationalSourceAttribute.Engine), sourceAttr.Engine,
+            "the database engine behind this connector, e.g. \"sqlserver\"");
+        RequireValue(t, nameof(RelationalSourceAttribute.DescribeTool), sourceAttr.DescribeTool,
+            "the key of the tool that returns this source's canonical schema");
+        RequireValue(t, nameof(RelationalSourceAttribute.QueryTool), sourceAttr.QueryTool,
+            "the key of the SQL tool the core's query gate governs");
+        RequireValue(t, nameof(RelationalSourceAttribute.SqlArg), sourceAttr.SqlArg,
+            "which argument of QueryTool carries the SQL text");
+
+        return new RelationalSourceDeclaration(
+            Engine:       sourceAttr.Engine,
+            DescribeTool: sourceAttr.DescribeTool,
+            QueryTool:    sourceAttr.QueryTool,
+            SqlArg:       sourceAttr.SqlArg,
+            ProviderType: t);
+    }
+
+    private static void RequireValue(Type t, string field, string value, string what)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ConnectorException(
+                $"Relational schema provider {t.FullName} declares no {field} — {what}.");
+        }
     }
 
     /// <summary>

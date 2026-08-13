@@ -3,19 +3,21 @@ using VestedAI.ConnectorSdk.Agent;
 using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
 using VestedAI.ConnectorSdk.Reflection;
+using VestedAI.ConnectorSdk.Schema;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk.Runtime;
 
 /// <summary>
 /// Walks an assembly and collects every class decorated with
-/// <c>[Agent]</c>, <c>[Tool]</c> or <c>[Credential]</c>.
+/// <c>[Agent]</c>, <c>[Tool]</c>, <c>[Credential]</c> or <c>[RelationalSource]</c>.
 /// Port of the Node scanner.ts and Python scanner.py.
 /// </summary>
 public static class Scanner
 {
     /// <summary>
-    /// Scan <paramref name="asm"/> and return all agent, tool and credential declarations.
+    /// Scan <paramref name="asm"/> and return all agent, tool, credential and
+    /// relational-source declarations.
     /// </summary>
     /// <returns>
     /// A tuple of:
@@ -23,24 +25,45 @@ public static class Scanner
     ///   <item><term>Agents</term><description>One entry per <c>[Agent]</c>-annotated type (deduped by key).</description></item>
     ///   <item><term>Tools</term><description>Keyed by tool key; duplicate key throws <see cref="ConnectorException"/>.</description></item>
     ///   <item><term>Credential</term><description>The single <c>[Credential]</c>-annotated handler, or null when the connector declares none.</description></item>
+    ///   <item><term>RelationalSource</term><description>The single <c>[RelationalSource]</c>-annotated provider, or null when the connector fronts no database.</description></item>
     /// </list>
     /// </returns>
     /// <exception cref="ConnectorException">
     /// Thrown when two different types declare the same tool key, or when more
-    /// than one type declares a credential schema.
+    /// than one type declares a credential schema or a relational source.
     /// </exception>
     public static (IReadOnlyList<AgentDeclaration> Agents,
                    IReadOnlyDictionary<string, ToolDeclaration> Tools,
-                   CredentialDeclaration? Credential)
+                   CredentialDeclaration? Credential,
+                   RelationalSourceDeclaration? RelationalSource)
         ScanAssembly(Assembly asm)
     {
         var agents = new List<AgentDeclaration>();
         var seenAgentKeys = new HashSet<string>(StringComparer.Ordinal);
         var tools = new Dictionary<string, ToolDeclaration>(StringComparer.Ordinal);
         CredentialDeclaration? credential = null;
+        RelationalSourceDeclaration? relationalSource = null;
 
         foreach (var type in asm.GetTypes())
         {
+            // ---- [RelationalSource] ----
+            bool hasRelationalSource =
+                type.GetCustomAttributes(typeof(RelationalSourceAttribute), inherit: false).Length > 0;
+            if (hasRelationalSource)
+            {
+                // A connector fronts exactly one relational source: two would
+                // leave the core guessing which query tool the SQL gate governs
+                // and which schema to extract.
+                if (relationalSource is not null && relationalSource.ProviderType != type)
+                {
+                    throw new ConnectorException(
+                        $"Two relational sources declared: {relationalSource.ProviderType.FullName} " +
+                        $"and {type.FullName}. A connector may declare only one.");
+                }
+
+                relationalSource = DeclarationFactory.FromRelationalSourceType(type);
+            }
+
             // ---- [Credential] ----
             bool hasCredential =
                 type.GetCustomAttributes(typeof(CredentialAttribute), inherit: false).Length > 0;
@@ -90,6 +113,6 @@ public static class Scanner
             }
         }
 
-        return (agents.AsReadOnly(), tools, credential);
+        return (agents.AsReadOnly(), tools, credential, relationalSource);
     }
 }

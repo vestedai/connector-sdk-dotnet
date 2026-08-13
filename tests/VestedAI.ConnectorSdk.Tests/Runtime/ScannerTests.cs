@@ -89,7 +89,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_FindsBothScannerAgents()
     {
-        var (agents, _, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (agents, _, _, _) = Scanner.ScanAssembly(_normalAssembly);
 
         var keys = agents.Select(a => a.Key).ToHashSet();
         Assert.Contains("scan.sales", keys);
@@ -99,7 +99,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_FindsBothScannerTools()
     {
-        var (_, tools, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (_, tools, _, _) = Scanner.ScanAssembly(_normalAssembly);
 
         Assert.True(tools.ContainsKey("scan.sales.lookup"), "scan.sales.lookup not found");
         Assert.True(tools.ContainsKey("scan.support.ticket"), "scan.support.ticket not found");
@@ -108,7 +108,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_AgentDeclaration_IsCorrect()
     {
-        var (agents, _, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (agents, _, _, _) = Scanner.ScanAssembly(_normalAssembly);
 
         var support = agents.First(a => a.Key == "scan.support");
         Assert.Equal("SupportAgent", support.Name);
@@ -120,7 +120,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_ToolDeclaration_IsCorrect()
     {
-        var (_, tools, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (_, tools, _, _) = Scanner.ScanAssembly(_normalAssembly);
 
         var lookup = tools["scan.sales.lookup"];
         Assert.Equal("Look up a contact", lookup.Description);
@@ -130,7 +130,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_AgentCount_IsExact()
     {
-        var (agents, _, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (agents, _, _, _) = Scanner.ScanAssembly(_normalAssembly);
         // Only 2 agents in our hermetic assembly.
         Assert.Equal(2, agents.Count);
     }
@@ -138,7 +138,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_ToolCount_IsExact()
     {
-        var (_, tools, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (_, tools, _, _) = Scanner.ScanAssembly(_normalAssembly);
         // Only 2 tools in our hermetic assembly.
         Assert.Equal(2, tools.Count);
     }
@@ -147,8 +147,8 @@ public class ScannerTests
     public void ScanAssembly_NoAgentDuplicates_OnRepeatedScan()
     {
         // Running twice must not add duplicates.
-        var (agents1, _, _) = Scanner.ScanAssembly(_normalAssembly);
-        var (agents2, _, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (agents1, _, _, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (agents2, _, _, _) = Scanner.ScanAssembly(_normalAssembly);
 
         var keys1 = agents1.Select(a => a.Key).OrderBy(x => x).ToList();
         var keys2 = agents2.Select(a => a.Key).OrderBy(x => x).ToList();
@@ -158,7 +158,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_EmptyAssembly_ReturnsEmpty()
     {
-        var (agents, tools, _) = Scanner.ScanAssembly(new FakeAssembly());
+        var (agents, tools, _, _) = Scanner.ScanAssembly(new FakeAssembly());
         Assert.Empty(agents);
         Assert.Empty(tools);
     }
@@ -168,7 +168,7 @@ public class ScannerTests
     {
         // A plain class with no [Agent] or [Tool] should be skipped.
         var asm = new FakeAssembly(typeof(string), typeof(object), typeof(ScannerSalesAgent));
-        var (agents, tools, _) = Scanner.ScanAssembly(asm);
+        var (agents, tools, _, _) = Scanner.ScanAssembly(asm);
         Assert.Single(agents);
         Assert.Empty(tools);
     }
@@ -188,7 +188,7 @@ public class ScannerTests
     {
         // Same agent type listed twice — scanner must dedupe by key, not throw.
         var asm = new FakeAssembly(typeof(ScannerSalesAgent), typeof(ScannerSalesAgent));
-        var (agents, _, _) = Scanner.ScanAssembly(asm);
+        var (agents, _, _, _) = Scanner.ScanAssembly(asm);
         Assert.Single(agents);
         Assert.Equal("scan.sales", agents[0].Key);
     }
@@ -196,7 +196,7 @@ public class ScannerTests
     [Fact]
     public void ScanAssembly_ToolDeclaration_HandlerTypeIsCorrect()
     {
-        var (_, tools, _) = Scanner.ScanAssembly(_normalAssembly);
+        var (_, tools, _, _) = Scanner.ScanAssembly(_normalAssembly);
         Assert.Equal(typeof(ScannerLookupTool), tools["scan.sales.lookup"].HandlerType);
     }
 }
