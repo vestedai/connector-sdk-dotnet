@@ -65,10 +65,16 @@ public sealed class CredentialOpDispatcher
 {
     private readonly CredentialOpener _opener;
     private readonly IUserCredentialHandler? _handler;
-    private readonly string _connectorId;
+    private readonly Func<string> _connectorId;
 
+    /// <param name="connectorId">
+    /// Resolved lazily, for the same reason as in <see cref="CredentialResolver"/>:
+    /// the hub assigns the connector id at HelloAck, which happens after this
+    /// object is constructed. Capturing it eagerly would bind the empty string
+    /// and fail the AAD identity check on every envelope.
+    /// </param>
     public CredentialOpDispatcher(
-        CredentialOpener opener, IUserCredentialHandler? handler, string connectorId)
+        CredentialOpener opener, IUserCredentialHandler? handler, Func<string> connectorId)
     {
         _opener = opener;
         _handler = handler;
@@ -104,7 +110,7 @@ public sealed class CredentialOpDispatcher
         IReadOnlyDictionary<string, string> credential;
         try
         {
-            credential = _opener.Open(envelope, _connectorId, req.UserId);
+            credential = _opener.Open(envelope, _connectorId(), req.UserId);
         }
         catch (CredentialException e)
         {

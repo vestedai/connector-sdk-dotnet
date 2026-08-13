@@ -1,4 +1,5 @@
 using VestedAI.ConnectorSdk.Agent;
+using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Tool;
 
 namespace VestedAI.ConnectorSdk.Runtime;
@@ -11,4 +12,20 @@ internal interface IConnectorRuntime
 {
     IReadOnlyList<AgentDeclaration> Agents { get; }
     IReadOnlyDictionary<string, ToolDeclaration> Tools { get; }
+
+    /// <summary>
+    /// The declared credential form, or null when this connector uses no
+    /// per-user auth. Null keeps <c>Register.credential_schema</c> absent, which
+    /// is what tells the platform never to gate this connector's tools.
+    /// </summary>
+    CredentialDeclaration? CredentialSchema { get; }
+
+    /// <summary>The connector's credential handler, or null when none is declared.</summary>
+    IUserCredentialHandler? CredentialHandler { get; }
+
+    /// <summary>
+    /// Opens sealed envelopes with the connector's private-key ring. Null when
+    /// no credential schema is declared.
+    /// </summary>
+    CredentialOpener? CredentialOpener { get; }
 }
