@@ -1,5 +1,6 @@
 using Google.Protobuf;
 using Vested.V1;
+using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Errors;
 using VestedAI.ConnectorSdk.Tool;
 
@@ -21,6 +22,7 @@ internal sealed class Daemon
     private readonly SignalHandler _signals;
     private readonly Action<Vested.V1.ToolCallRequest>? _dispatcher;
     private readonly VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? _credentialOps;
+    private readonly SessionIdentity? _identity;
 
     private HeartbeatTimer? _heartbeat;
 
@@ -37,13 +39,17 @@ internal sealed class Daemon
         SignalHandler signals,
         Action<Vested.V1.ToolCallRequest>? dispatcher = null,
         // Null when the connector declares no per-user credential handler.
-        VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? credentialOps = null)
+        VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? credentialOps = null,
+        // Filled in from HelloAck so the credential paths can verify the
+        // envelope's identity binding. Null when no credential schema is declared.
+        SessionIdentity? identity = null)
     {
         _app = app;
         _client = client;
         _signals = signals;
         _dispatcher = dispatcher;
         _credentialOps = credentialOps;
+        _identity = identity;
     }
 
     /// <summary>Runs one connector session and returns an exit code (0, 1, or 78).</summary>
@@ -69,6 +75,12 @@ internal sealed class Daemon
                 throw new ConnectorException("expected HelloAck, got something else");
 
             var ack = ackMsg.HelloAck;
+
+            // Publish the hub-assigned id to the credential paths, which were
+            // constructed before this point and read it through a Func<string>.
+            if (_identity is not null)
+                _identity.ConnectorId = ack.ConnectorId;
+
             Console.WriteLine(
                 $"[vested] connected to hub: connector_id={ack.ConnectorId} " +
                 $"namespace={ack.Namespace} " +
@@ -244,7 +256,40 @@ internal sealed class Daemon
             reg.Agents.Add(a);
         }
 
+        // Absent when the connector declares no per-user auth — that absence is
+        // what tells the platform to hide it from the credential UI and never
+        // gate its tools.
+        if (_app.CredentialSchema is not null)
+            reg.CredentialSchema = ToProto(_app.CredentialSchema);
+
         return new ConnectorMsg { Register = reg };
+    }
+
+    /// <summary>Maps a <see cref="CredentialDeclaration"/> to its proto representation.</summary>
+    internal static CredentialSchemaDecl ToProto(CredentialDeclaration d)
+    {
+        var decl = new CredentialSchemaDecl
+        {
+            Kind     = d.Kind,
+            Title    = d.Title,
+            HelpText = d.HelpText,
+        };
+
+        foreach (var f in d.Fields)
+        {
+            var field = new CredentialFieldDecl
+            {
+                Key         = f.Key,
+                Label       = f.Label,
+                Type        = f.Type,
+                Required    = f.Required,
+                Placeholder = f.Placeholder,
+            };
+            field.Options.AddRange(f.Options);
+            decl.Fields.Add(field);
+        }
+
+        return decl;
     }
 
     /// <summary>Maps a <see cref="ToolDeclaration"/> to its proto <see cref="ToolDecl"/> representation.</summary>

@@ -1,4 +1,5 @@
 using VestedAI.ConnectorSdk.Agent;
+using VestedAI.ConnectorSdk.Credential;
 using VestedAI.ConnectorSdk.Runtime;
 using VestedAI.ConnectorSdk.Tool;
 
@@ -19,6 +20,15 @@ public sealed class ConnectorApp : IConnectorRuntime
     /// <inheritdoc/>
     public IReadOnlyDictionary<string, ToolDeclaration> Tools { get; }
 
+    /// <inheritdoc/>
+    public CredentialDeclaration? CredentialSchema { get; }
+
+    /// <inheritdoc/>
+    public IUserCredentialHandler? CredentialHandler { get; }
+
+    /// <inheritdoc/>
+    public CredentialOpener? CredentialOpener { get; }
+
     private readonly bool _insecure;
 
     /// <summary>
@@ -27,11 +37,17 @@ public sealed class ConnectorApp : IConnectorRuntime
     internal ConnectorApp(
         IReadOnlyList<AgentDeclaration> agents,
         IReadOnlyDictionary<string, ToolDeclaration> tools,
-        bool insecure)
+        bool insecure,
+        CredentialDeclaration? credentialSchema = null,
+        IUserCredentialHandler? credentialHandler = null,
+        CredentialOpener? credentialOpener = null)
     {
         Agents = agents;
         Tools = tools;
         _insecure = insecure;
+        CredentialSchema = credentialSchema;
+        CredentialHandler = credentialHandler;
+        CredentialOpener = credentialOpener;
     }
 
     /// <summary>

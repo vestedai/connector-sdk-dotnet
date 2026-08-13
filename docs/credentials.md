@@ -23,6 +23,10 @@ nothing is unaffected in every respect.
 ```csharp
 using VestedAI.ConnectorSdk.Credential;
 
+[Credential(Kind = "basic", Title = "Al-Saif ERP account",
+            HelpText = "Use the sign-in you use for the ERP itself.")]
+[CredentialField(Key = "username", Label = "User name", Type = "text")]
+[CredentialField(Key = "password", Label = "Password",  Type = "password")]
 public sealed class ErpCredentials : IUserCredentialHandler
 {
     private readonly ErpClient _erp;
@@ -49,14 +53,39 @@ public sealed class ErpCredentials : IUserCredentialHandler
         Task.CompletedTask;
 }
 ```
-Register it, with the private key that opens sealed envelopes:
+`ScanAssembly` picks the handler up the same way it picks up your agents and
+tools — the `[Credential]` attribute is the registration. Nothing else in
+`Program.cs` changes:
 
-Register the handler on your `ConnectorApp` alongside your agents and tools.
+```csharp
+return await ConnectorHost.CreateBuilder()
+    .ScanAssembly(Assembly.GetExecutingAssembly())
+    .Build()
+    .RunFromEnvironmentAsync();
+```
 
 Keys come from `VESTED_CREDENTIAL_PRIVATE_KEY` (or `VESTED_CREDENTIAL_PRIVATE_KEY_FILE`)
 when you don't pass them explicitly. Registering a handler without a key throws
 at startup rather than failing every credential check later with a puzzling
 message.
+
+Two escape hatches, for when the defaults don't fit:
+
+```csharp
+ConnectorHost.CreateBuilder()
+    .ScanAssembly(Assembly.GetExecutingAssembly())
+    // Keys from a secret manager rather than the environment.
+    .UseCredentialKeys(pemNewest, pemPrevious)
+    // A handler with constructor dependencies, built by you.
+    .UseCredentialHandler(new ErpCredentials(erpClient))
+    .Build();
+```
+
+Implementing `IUserCredentialHandler` is not what opts you in — the
+`[Credential]` attribute is. A class that implements the interface without the
+attribute is ignored, and a connector that declares no `[Credential]` class
+sends no `credential_schema` at registration, which is what keeps its tools
+ungated.
 
 ## Using them in a tool
 
@@ -92,7 +121,25 @@ Field types are `text`, `password`, `url`, `select`. A `password` field renders
 masked; `select` needs `options`. The platform builds the user's form from this
 — you never write UI.
 
-Declare `kind`, `title` and one entry per field on your handler, using this SDK's declaration style (the same mechanism your agents and tools already use).
+`[Credential]` carries `Kind` (`basic`, `token` or `custom`), `Title` and
+`HelpText`; one `[CredentialField]` follows per field:
+
+```csharp
+[Credential(Kind = "custom", Title = "Warehouse login")]
+[CredentialField(Key = "username", Label = "User name",  Type = "text",
+                 Placeholder = "j.smith")]
+[CredentialField(Key = "token",    Label = "API token",  Type = "password")]
+[CredentialField(Key = "region",   Label = "Region",     Type = "select",
+                 Options = new[] { "eu-west", "me-central" })]
+[CredentialField(Key = "endpoint", Label = "Endpoint",   Type = "url",
+                 Required = false)]
+public sealed class WarehouseCredentials : IUserCredentialHandler { /* … */ }
+```
+
+`Key` is the map key your handler and tools read — `credential["username"]`.
+`Required` defaults to true. The declaration is validated when the builder runs,
+so a `select` with no `Options`, a duplicate key, or an unknown type fails at
+startup rather than producing a form the user cannot complete.
 
 ## Key rotation
 

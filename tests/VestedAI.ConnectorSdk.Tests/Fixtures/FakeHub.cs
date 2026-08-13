@@ -21,6 +21,28 @@ public sealed class ScriptedToolCall
     public string ToolKey { get; init; } = "";
     public string ArgsJson { get; init; } = "{}";
     public string InvocationId { get; init; } = "inv-1";
+
+    /// <summary>Calling user id — half of the credential envelope's identity binding.</summary>
+    public string UserId { get; init; } = "";
+
+    /// <summary>
+    /// Sealed credential envelope, forwarded verbatim. Empty for the ordinary
+    /// no-credential path that every connector without a schema takes.
+    /// </summary>
+    public string CredentialEnvelopeJson { get; init; } = "";
+}
+
+/// <summary>
+/// One scripted credential lifecycle op ("validate" or "revoke") the fake hub
+/// sends after RegisterAck.
+/// </summary>
+public sealed class ScriptedCredentialOp
+{
+    public string OpId { get; init; } = "op-1";
+    public string Op { get; init; } = "validate";
+    public string UserId { get; init; } = "";
+    public string UserEmail { get; init; } = "";
+    public string EnvelopeJson { get; init; } = "";
 }
 
 /// <summary>
@@ -37,6 +59,19 @@ public sealed class FakeHubScript
     /// <summary>Ordered tool calls the hub issues after RegisterAck.</summary>
     public IReadOnlyList<ScriptedToolCall> ToolCalls { get; init; } =
         Array.Empty<ScriptedToolCall>();
+
+    /// <summary>
+    /// Credential ops the hub issues after RegisterAck, before the tool calls.
+    /// </summary>
+    public IReadOnlyList<ScriptedCredentialOp> CredentialOps { get; init; } =
+        Array.Empty<ScriptedCredentialOp>();
+
+    /// <summary>
+    /// connector_id the hub assigns at HelloAck. Credential envelopes are bound
+    /// to it, so a test using the shared envelope vectors must set the id those
+    /// vectors were sealed for.
+    /// </summary>
+    public string ConnectorId { get; init; } = "fake-hub";
 
     /// <summary>
     /// Reason sent in the final GoAway. Use "" to skip GoAway entirely.
@@ -57,6 +92,7 @@ public sealed class FakeHubCapture
     public Hello? ReceivedHello { get; internal set; }
     public Register? ReceivedRegister { get; internal set; }
     public List<ToolCallResponse> ReceivedToolResponses { get; } = new();
+    public List<CredentialOpResponse> ReceivedCredentialResponses { get; } = new();
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +128,13 @@ internal sealed class FakeHubService : ConnectorHub.ConnectorHubBase
             .ConfigureAwait(false);
 
         if (!accepted) return;
+
+        // Step 3a: issue each scripted credential op and await its response.
+        foreach (var op in _script.CredentialOps)
+        {
+            await IssueCredentialOp(op, requestStream, responseStream, context.CancellationToken)
+                .ConfigureAwait(false);
+        }
 
         // Step 3: issue each scripted tool call and await the ToolCallResponse
         foreach (var scripted in _script.ToolCalls)
@@ -129,7 +172,7 @@ internal sealed class FakeHubService : ConnectorHub.ConnectorHubBase
                 {
                     HelloAck = new HelloAck
                     {
-                        ConnectorId            = "fake-hub",
+                        ConnectorId            = _script.ConnectorId,
                         OrganizationId         = "test-org",
                         Namespace              = "test",
                         MaxAgents              = 10,
@@ -218,10 +261,13 @@ internal sealed class FakeHubService : ConnectorHub.ConnectorHubBase
                 AgentKey       = "",
                 ArgsJson       = Google.Protobuf.ByteString.CopyFromUtf8(scripted.ArgsJson),
                 OrganizationId = "",
-                UserId         = "",
+                UserId         = scripted.UserId,
                 ConversationId = "",
                 DeadlineMs     = 30_000,
                 UserEmail      = "",
+                CredentialEnvelopeJson = string.IsNullOrEmpty(scripted.CredentialEnvelopeJson)
+                    ? Google.Protobuf.ByteString.Empty
+                    : Google.Protobuf.ByteString.CopyFromUtf8(scripted.CredentialEnvelopeJson),
             }
         }, ct).ConfigureAwait(false);
 
@@ -246,6 +292,49 @@ internal sealed class FakeHubService : ConnectorHub.ConnectorHubBase
         }
         throw new RpcException(new Status(StatusCode.Aborted,
             $"stream ended before ToolCallResponse for {scripted.InvocationId}"));
+    }
+
+    private async Task IssueCredentialOp(
+        ScriptedCredentialOp op,
+        IAsyncStreamReader<ConnectorMsg> requestStream,
+        IServerStreamWriter<HubMsg> responseStream,
+        CancellationToken ct)
+    {
+        await responseStream.WriteAsync(new HubMsg
+        {
+            CredentialOpRequest = new CredentialOpRequest
+            {
+                OpId         = op.OpId,
+                Op           = op.Op,
+                UserId       = op.UserId,
+                UserEmail    = op.UserEmail,
+                EnvelopeJson = Google.Protobuf.ByteString.CopyFromUtf8(op.EnvelopeJson),
+                DeadlineMs   = 30_000,
+            }
+        }, ct).ConfigureAwait(false);
+
+        while (await requestStream.MoveNext(ct).ConfigureAwait(false))
+        {
+            var msg = requestStream.Current;
+
+            if (msg.BodyCase == ConnectorMsg.BodyOneofCase.Heartbeat)
+            {
+                await responseStream.WriteAsync(new HubMsg { HeartbeatAck = new HeartbeatAck() }, ct)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
+            if (msg.BodyCase == ConnectorMsg.BodyOneofCase.CredentialOpResponse)
+            {
+                _capture.ReceivedCredentialResponses.Add(msg.CredentialOpResponse);
+                return;
+            }
+        }
+
+        // A connector that never answers is the exact failure the inline
+        // credential-op path exists to prevent, so surface it loudly.
+        throw new RpcException(new Status(StatusCode.Aborted,
+            $"stream ended before CredentialOpResponse for {op.OpId}"));
     }
 }
 
