@@ -159,9 +159,19 @@ public sealed class ConnectorHostBuilder
 
         if (_credential is not null && _credential.HandlerType != declared.HandlerType)
         {
+            // Name where the OTHER declaration came from, as the relational twin
+            // below does. Saying "already scanned" when it was in fact supplied
+            // by an earlier call sends the operator off to grep an assembly that
+            // is perfectly fine. Only UseCredentialHandler sets
+            // _credentialHandler, so its presence IS the provenance — no extra
+            // flag needed.
+            var origin = _credentialHandler is null
+                ? "was already scanned"
+                : "was already supplied to UseCredentialHandler";
+
             throw new ConnectorException(
                 $"UseCredentialHandler supplied {declared.HandlerType.FullName} but " +
-                $"{_credential.HandlerType.FullName} was already scanned. " +
+                $"{_credential.HandlerType.FullName} {origin}. " +
                 "A connector may declare only one credential handler.");
         }
 

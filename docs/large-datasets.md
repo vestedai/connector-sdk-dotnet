@@ -146,23 +146,27 @@ public class PosTransactions : PaginatedToolHandler<PosTransactions.Args, PosTra
         public string Payment { get; set; } = "";
     }
 
-    private readonly IPosRepository _repo;
-    public PosTransactions(IPosRepository repo) => _repo = repo;
+    // Handlers are constructed per call with Activator.CreateInstance, so they
+    // cannot take constructor dependencies. Program.cs sets this once.
+    public static IPosRepository? Repo { get; set; }
 
     public override async Task<DatasetPage<Row>> FetchPageAsync(
         Args args, DatasetCursor cursor, ToolContext ctx)
     {
+        var repo = Repo ?? throw new InvalidOperationException(
+            "PosTransactions.Repo was never set — wire it up in Program.cs.");
+
         // Cursor token = row offset. Null token means the first page.
         var offset   = cursor.Token is null ? 0 : int.Parse(cursor.Token);
         var pageSize = cursor.PageSize > 0 ? cursor.PageSize : 200;
 
         // COUNT is cheap here, so report the true total (drives the LLM's
         // total_estimate and the platform's confirm-before-huge-export gate).
-        var total = await _repo.CountTransactionsAsync(args.From, args.To, args.Store);
+        var total = await repo.CountTransactionsAsync(args.From, args.To, args.Store);
 
         // INVARIANT: deterministic ORDER BY (timestamp + transaction_no
         // tiebreaker) so sequential pages never skip or duplicate rows.
-        var rows = await _repo.GetTransactionsPageAsync(
+        var rows = await repo.GetTransactionsPageAsync(
             args.From, args.To, args.Store, offset, pageSize);
 
         var next = offset + rows.Count < total
@@ -186,18 +190,46 @@ public class PosTransactions : PaginatedToolHandler<PosTransactions.Args, PosTra
 }
 ```
 
+```csharp
+// Program.cs — hand the handler its dependency before the worker starts.
+PosTransactions.Repo = new PosRepository(connectionString);
+
+return await ConnectorHost.CreateBuilder()
+    .ScanAssembly(Assembly.GetExecutingAssembly())
+    .Build()
+    .RunFromEnvironmentAsync();
+```
+
+**Why a static property and not a constructor?** The dispatcher instantiates a
+fresh handler per call with `Activator.CreateInstance(HandlerType)`, which only
+works with a parameterless constructor. Nothing checks this at startup — unlike
+`[Credential]` and `[RelationalSource]`, which each refuse to start when the SDK
+would have to construct a type it cannot. A handler with a
+`PosTransactions(IPosRepository repo)` constructor therefore registers happily
+and throws `MissingMethodException` on the **first agent call**, in production,
+with no connection to the line that caused it. Keep handlers parameterless and
+free of per-call state; carry the dependency in a `static` set once during
+startup.
+
 ### Keyset / continuation-token variant
 
 When offsets are unstable or expensive (large OData sets, Business Central
 APIs), carry the backend's own continuation token:
 
 ```csharp
+// Same construction rule as above: the client arrives through a static set in
+// Program.cs, never through a constructor parameter.
+public static IErpClient? Client { get; set; }
+
 public override async Task<DatasetPage<Row>> FetchPageAsync(
     Args args, DatasetCursor cursor, ToolContext ctx)
 {
+    var client = Client ?? throw new InvalidOperationException(
+        "Client was never set — wire it up in Program.cs.");
+
     // Token is the backend's continuation link, verbatim. The platform
     // round-trips it; only you interpret it.
-    var page = await _client.GetPageAsync(
+    var page = await client.GetPageAsync(
         filter: BuildFilter(args),
         continuation: cursor.Token,          // null = first page
         top: cursor.PageSize > 0 ? cursor.PageSize : 200);

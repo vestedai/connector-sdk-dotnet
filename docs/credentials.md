@@ -20,9 +20,15 @@ A connector declares a credential schema at registration. Declaring one is what
 turns the whole feature on for your integration — a connector that declares
 nothing is unaffected in every respect.
 
+The declaration is the `[Credential]` and `[CredentialField]` attributes on your
+handler class, described under [The declaration](#the-declaration) below.
+
 ```csharp
 using VestedAI.ConnectorSdk.Credential;
 
+[Credential(Kind = "basic", Title = "Al-Saif ERP account")]
+[CredentialField(Key = "username", Label = "ERP username", Type = "text",     Required = true)]
+[CredentialField(Key = "password", Label = "ERP password", Type = "password", Required = true)]
 public sealed class ErpCredentials : IUserCredentialHandler
 {
     private readonly ErpClient _erp;
@@ -49,14 +55,36 @@ public sealed class ErpCredentials : IUserCredentialHandler
         Task.CompletedTask;
 }
 ```
+
 Register it, with the private key that opens sealed envelopes:
 
-Register the handler on your `ConnectorApp` alongside your agents and tools.
+```csharp
+// Program.cs
+using System.Reflection;
+using VestedAI.ConnectorSdk;
 
-Keys come from `VESTED_CREDENTIAL_PRIVATE_KEY` (or `VESTED_CREDENTIAL_PRIVATE_KEY_FILE`)
-when you don't pass them explicitly. Registering a handler without a key throws
-at startup rather than failing every credential check later with a puzzling
-message.
+return await ConnectorHost.CreateBuilder()
+    .ScanAssembly(Assembly.GetExecutingAssembly())
+    .UseCredentialHandler(new ErpCredentials(erpClient))
+    .Build()
+    .RunFromEnvironmentAsync();
+```
+
+`UseCredentialHandler` lives on `ConnectorHostBuilder` — the object
+`ConnectorHost.CreateBuilder()` returns, not the built `ConnectorApp`. Pass a
+ready-made instance whenever the handler takes constructor dependencies, as this
+one does: a scanned handler is constructed by the SDK with
+`Activator.CreateInstance`, so `Build()` refuses a scanned handler that has no
+parameterless constructor rather than failing at the first credential op. A
+handler that genuinely has one needs no call at all — `ScanAssembly` finds it
+through its `[Credential]` attribute.
+
+`Build()` reads the keys from `VESTED_CREDENTIAL_PRIVATE_KEY` (or
+`VESTED_CREDENTIAL_PRIVATE_KEY_FILE`) unless you supply them yourself with
+`UseCredentialKeys(params string[] privateKeyPems)` — use that when they come
+from a secret manager rather than the process environment. Registering a handler
+without a key throws at startup rather than failing every credential check later
+with a puzzling message.
 
 ## Using them in a tool
 
@@ -88,11 +116,42 @@ credential is present and valid.
 
 ## The declaration
 
-Field types are `text`, `password`, `url`, `select`. A `password` field renders
-masked; `select` needs `options`. The platform builds the user's form from this
-— you never write UI.
+Both attributes go **above the class**, one `[CredentialField]` per field, in
+the order the user should see them. The platform builds the form from this —
+you never write UI.
 
-Declare `kind`, `title` and one entry per field on your handler, using this SDK's declaration style (the same mechanism your agents and tools already use).
+```csharp
+[Credential(Kind = "basic", Title = "Al-Saif ERP account", HelpText = "Ask IT for a service login.")]
+[CredentialField(Key = "username", Label = "ERP username", Type = "text",     Required = true)]
+[CredentialField(Key = "password", Label = "ERP password", Type = "password", Required = true)]
+[CredentialField(Key = "company",  Label = "Company",      Type = "select",
+                 Options = new[] { "KSA", "UAE" })]
+public sealed class ErpCredentials : IUserCredentialHandler
+{
+    // …
+}
+```
+
+`Kind` is one of `basic`, `token`, `custom` (default `basic`). Field types are
+`text`, `password`, `url`, `select` (default `text`). A `password` field renders
+masked; `select` needs `Options`; `Label` defaults to `Key`.
+
+Everything here is checked when the declaration is read — at `ScanAssembly` or
+`UseCredentialHandler`, before your connector ever connects: a blank `Title`, an
+unknown kind or type, a duplicate field key, an optionless `select` or a schema
+with no fields at all throws `ConnectorException` at startup, because the
+alternative is a rejected registration or a form the user cannot complete.
+
+Registering a handler **without** `[Credential]` throws
+(*"Type … is missing the [Credential] attribute."*). With no schema the platform
+renders no form, so nobody can save a credential and none of your tools are
+gated — every call keeps running as the connector's own shared account, which is
+the misattribution this feature exists to end.
+
+Put the attributes on the handler class **you register**. They are read with
+`inherit: false`, so a subclass of an annotated handler declares nothing: the
+scanner does not find it, and passing one to `UseCredentialHandler` throws the
+missing-attribute error above.
 
 ## Key rotation
 
