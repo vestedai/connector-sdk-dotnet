@@ -97,6 +97,65 @@ public sealed class RegisterSlowCatalogProvider : IRelationalSchemaProvider
 }
 
 /// <summary>
+/// Ignores its cancellation token entirely — the case the linked token cannot
+/// reach. Not hypothetical: this SDK ships on NuGet, so third-party providers
+/// are the long tail, and one of these is enough to hold Register past the
+/// hub's idle timer and take the connector's whole tool surface offline.
+/// </summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class RegisterUncooperativeProvider : IRelationalSchemaProvider
+{
+    public static readonly TimeSpan Delay = TimeSpan.FromSeconds(40);
+
+    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
+        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
+
+    public async Task<string> CatalogFingerprintAsync(CancellationToken ct)
+    {
+        // No token. That is the whole point of the fixture.
+        await Task.Delay(Delay).ConfigureAwait(false);
+        return "a-fingerprint-nobody-should-ever-see";
+    }
+}
+
+/// <summary>
+/// Ignores its token AND fails, shortly after any bound a test would set — so
+/// the abandoned call's later failure can be asserted without a slow test.
+/// Timers fire late, never early, so 150ms cannot beat a 50ms bound.
+/// </summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class RegisterUncooperativeFailingProvider : IRelationalSchemaProvider
+{
+    public static readonly TimeSpan Delay = TimeSpan.FromMilliseconds(150);
+
+    /// <summary>Message the abandoned-call warning must name.</summary>
+    public const string Failure = "catalog host db-erp-02.internal closed the connection";
+
+    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
+        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
+
+    public async Task<string> CatalogFingerprintAsync(CancellationToken ct)
+    {
+        await Task.Delay(Delay).ConfigureAwait(false);
+        throw new InvalidOperationException(Failure);
+    }
+}
+
+/// <summary>
 /// Returns a DIFFERENT fingerprint on every call, so a test can tell a value
 /// read live this session from one cached at <c>Build()</c> and replayed.
 /// </summary>
@@ -438,6 +497,105 @@ public class RegisterRelationalSourceTests
         // cancellation is an implementation detail of the bound, not a fault
         // the database reported.
         Assert.DoesNotContain("Exception", warning);
+        Assert.DoesNotContain("abandoned", warning);
+    }
+
+    // -----------------------------------------------------------------------
+    // A provider that ignores its cancellation token — what the linked token
+    // alone cannot bound, and what the race exists for.
+
+    [Fact(Timeout = 10_000)]
+    public async Task Register_ProviderIgnoresItsToken_StillRegistersWithAnEmptyFingerprint()
+    {
+        // Cancelling the token only asks. A provider that never looks at it
+        // keeps running, and without the race it holds Register hostage for as
+        // long as it likes — one such provider on NuGet reproduces the entire
+        // outage: Register never sent, GoAway{idle}, permanent reconnect loop.
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        var script = new FakeHubScript
+        {
+            AcceptRegister    = true,
+            ToolCalls         = Array.Empty<ScriptedToolCall>(),
+            FinalGoAwayReason = "revoked",
+        };
+
+        await FakeHubServer.RunAsync(script, async server =>
+        {
+            var app = ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(RegisterUncooperativeProvider)))
+                .UseInsecureTransport()
+                .Build();
+
+            var started = System.Diagnostics.Stopwatch.StartNew();
+
+            var (_, handshakeCompleted) = await SessionRunner
+                .RunOneSessionAsync(app, server.Port, cts.Token,
+                    fingerprintTimeout: TimeSpan.FromMilliseconds(250))
+                .ConfigureAwait(false);
+
+            started.Stop();
+
+            Assert.True(
+                started.Elapsed < TimeSpan.FromSeconds(5),
+                $"Register waited {started.Elapsed.TotalSeconds:0.#}s on a provider that ignores " +
+                $"its cancellation token; the bound is cooperative-only.");
+
+            var register = server.Capture.ReceivedRegister;
+            Assert.NotNull(register);
+            Assert.NotNull(register.RelationalSource);
+            Assert.Equal("sqlserver", register.RelationalSource.Engine);
+            Assert.Equal("rs.demo.query_sql", register.RelationalSource.QueryTool);
+            Assert.Equal("", register.RelationalSource.Fingerprint);
+
+            Assert.True(handshakeCompleted);
+        });
+    }
+
+    [Fact(Timeout = 10_000)]
+    public async Task ToProtoAsync_AbandonedCallLaterFails_IsStillReported()
+    {
+        // The failure would otherwise be swallowed twice — by the race that
+        // stopped waiting, and again as an unobserved task exception — leaving
+        // nothing at all to explain why this catalog never gets fingerprinted.
+        //
+        // Not racy: the provider fails at 150ms and the bound is 50ms, and a
+        // timer cannot fire early. The second warning is awaited on a signal
+        // rather than a sleep.
+        var warnings = new List<string>();
+        var abandonedReported = new TaskCompletionSource();
+
+        void Warn(string message)
+        {
+            lock (warnings) warnings.Add(message);
+            if (message.Contains("abandoned", StringComparison.Ordinal))
+                abandonedReported.TrySetResult();
+        }
+
+        var decl = await Daemon.ToProtoAsync(
+            new RelationalSourceDeclaration(
+                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                typeof(RegisterUncooperativeFailingProvider)),
+            new RegisterUncooperativeFailingProvider(),
+            CancellationToken.None,
+            Warn,
+            TimeSpan.FromMilliseconds(50));
+
+        // Register went out without waiting for the provider.
+        Assert.Equal("", decl.Fingerprint);
+
+        await abandonedReported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        string[] seen;
+        lock (warnings) seen = warnings.ToArray();
+
+        Assert.Equal(2, seen.Length);
+
+        // First the bound, then — later — what the call it gave up on did.
+        Assert.Contains("did not answer within", seen[0]);
+        Assert.Contains("abandoned", seen[1]);
+        Assert.Contains(RegisterUncooperativeFailingProvider.Failure, seen[1]);
+        Assert.Contains("did not honour its cancellation token", seen[1]);
     }
 
     // -----------------------------------------------------------------------

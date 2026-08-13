@@ -353,30 +353,65 @@ internal sealed class Daemon
         using var fpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         fpCts.CancelAfter(bound);
 
+        // DELIBERATE on failure of any kind: emit the declaration anyway, with
+        // an empty fingerprint. A source database that is unreachable or cold
+        // at connector startup is normal and transient. An empty fingerprint
+        // makes the core re-extract — expensive, but correct and visible in its
+        // own logs. Omitting the declaration instead would silently disable
+        // schema extraction AND the SQL gate for the whole session, with
+        // nothing anywhere reporting that governance had stopped. Silent
+        // disablement is the failure class this declaration exists to close, so
+        // it must never be the response to a transient error.
+        //
+        // Null means "the fingerprint arrived"; anything else is warned about
+        // below. The three wordings are deliberately distinct — "did not
+        // answer", "answered with an error", and "the abandoned call later
+        // failed" send an operator to three different places.
+        string? cause = null;
+
         try
         {
-            decl.Fingerprint = await provider.CatalogFingerprintAsync(fpCts.Token).ConfigureAwait(false);
+            var fingerprinting = provider.CatalogFingerprintAsync(fpCts.Token);
+
+            // The token is passed AND the wait is raced, and both halves earn
+            // their place. Passing it is what makes cancellation cheap for a
+            // compliant provider — SqlClient sends an attention and frees the
+            // connection — and the race alone would leave that connection
+            // stalled. Racing it is what bounds Register for a provider that
+            // ignores its token, which this SDK cannot assume away: it ships on
+            // NuGet, so third-party IRelationalSchemaProvider implementations
+            // are the long tail, and exactly one non-cooperative provider
+            // reproduces the whole outage described above.
+            var winner = await Task.WhenAny(fingerprinting, Task.Delay(bound, fpCts.Token))
+                .ConfigureAwait(false);
+
+            // WhenAny may return either task when both complete in the same
+            // instant, so prefer a fingerprint that actually arrived over
+            // reporting a timeout that did not really happen.
+            if (winner == fingerprinting || fingerprinting.IsCompletedSuccessfully)
+            {
+                decl.Fingerprint = await fingerprinting.ConfigureAwait(false);
+            }
+            else
+            {
+                cause = DidNotAnswer(bound);
+                ObserveAbandoned(fingerprinting, d.QueryTool, warn);
+            }
         }
         catch (Exception ex)
         {
-            // DELIBERATE: emit the declaration anyway, with an empty
-            // fingerprint. A source database that is unreachable or cold at
-            // connector startup is normal and transient. An empty fingerprint
-            // makes the core re-extract — expensive, but correct and visible in
-            // its own logs. Omitting the declaration instead would silently
-            // disable schema extraction AND the SQL gate for the whole session,
-            // with nothing anywhere reporting that governance had stopped.
-            // Silent disablement is the failure class this declaration exists
-            // to close, so it must never be the response to a transient error.
-            //
-            // The bound expiring arrives here too, as a cancellation — which is
-            // why it needs no branch of its own, only its own wording: an
-            // operator must not read "did not answer" as "answered with an
-            // error", because those send you to different systems.
-            var cause = fpCts.IsCancellationRequested && !ct.IsCancellationRequested
-                ? $"it did not answer within {bound.TotalSeconds:0.###}s"
+            // A cooperative provider cancelled by the bound arrives here rather
+            // than through the race, so the expiry needs no branch of its own —
+            // only its own wording, which is why the condition is on the token
+            // and not on the exception type. On SIGTERM `ct` cancels first and
+            // cascades, so this is false and the real cause is reported.
+            cause = fpCts.IsCancellationRequested && !ct.IsCancellationRequested
+                ? DidNotAnswer(bound)
                 : $"{ex.GetType().Name}: {ex.Message}";
+        }
 
+        if (cause is not null)
+        {
             (warn ?? Console.Error.WriteLine)(
                 $"[vested] catalog fingerprint unavailable for relational source " +
                 $"'{d.QueryTool}' — {cause}; registering with an empty fingerprint, " +
@@ -384,6 +419,37 @@ internal sealed class Daemon
         }
 
         return decl;
+    }
+
+    private static string DidNotAnswer(TimeSpan bound)
+        => $"it did not answer within {bound.TotalSeconds:0.###}s";
+
+    /// <summary>
+    /// Keeps an abandoned fingerprint call observed, and reports it if it ever
+    /// fails.
+    /// </summary>
+    /// <remarks>
+    /// Only reached for a provider that ignored its cancellation token: it is
+    /// still running after Register has gone out. Without this its eventual
+    /// failure would be swallowed twice — once by the race that stopped waiting
+    /// for it, once as an unobserved task exception — and the operator would
+    /// have nothing at all to explain why the catalog never gets fingerprinted.
+    /// </remarks>
+    private static void ObserveAbandoned(Task<string> abandoned, string queryTool, Action<string>? warn)
+    {
+        _ = abandoned.ContinueWith(
+            t =>
+            {
+                var error = t.Exception!.Flatten().InnerException ?? t.Exception;
+                (warn ?? Console.Error.WriteLine)(
+                    $"[vested] the abandoned catalog fingerprint call for relational source " +
+                    $"'{queryTool}' later failed: {error.GetType().Name}: {error.Message}. " +
+                    $"It did not honour its cancellation token; the connector registered " +
+                    $"without waiting for it");
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>Maps a <see cref="CredentialDeclaration"/> to its proto representation.</summary>
