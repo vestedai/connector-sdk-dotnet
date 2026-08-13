@@ -13,7 +13,7 @@ Connect any .NET service to the Vested AI platform. The SDK opens a long-lived g
 dotnet add package VestedAI.ConnectorSdk
 ```
 
-Requires .NET 8 (LTS). Or run the Docker image: `vestedai/vested-ai-connector-sdk-dotnet:0.1.0` (also `:latest`, multi-arch amd64/arm64).
+Requires .NET 8 (LTS). Or run the Docker image: `vestedai/vested-ai-connector-sdk-dotnet:0.5.0` (also `:latest`, multi-arch amd64/arm64).
 
 ## Connector Snippet
 
@@ -177,13 +177,13 @@ This differs from writing your own LLM client. The connector does not call the L
 | [Concepts](docs/concepts.md) | Agents, tools, instructions, baselines vs overrides, inheritance state machine, reconciliation |
 | [API reference](docs/api.md) | `ConnectorHost`, `[Agent]`, `[Tool]`, `ToolHandler<,>`, `ToolContext` |
 | [Operations](docs/operations.md) | Docker, env vars, reconnect supervisor, exit codes, signals |
-| [Upgrading](docs/upgrading.md) | Coming from the PHP / Python / Node SDK; v0.1.0 release notes |
+| [Upgrading](docs/upgrading.md) | Coming from the PHP / Python / Node SDK; v0.5.0 release notes |
 | [Per-user credentials](docs/credentials.md) | Act on behalf of the calling user: sealed credentials the platform cannot read, validation, key rotation |
 | [Doc index](docs/README.md) | Full table of contents including protocol reference |
 
 ## License + Status
 
-MIT. Current release: **v0.1.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity). Wire-parity with the PHP / Python / Node SDKs at v0.3. On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
+MIT. Current release: **v0.5.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity, `[Credential]` and `[RelationalSource]` Register declarations). On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
 
 ## Other language SDKs
 
