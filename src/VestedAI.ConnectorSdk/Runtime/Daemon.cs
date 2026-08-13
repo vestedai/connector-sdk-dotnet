@@ -355,13 +355,25 @@ internal sealed class Daemon
 
         // DELIBERATE on failure of any kind: emit the declaration anyway, with
         // an empty fingerprint. A source database that is unreachable or cold
-        // at connector startup is normal and transient. An empty fingerprint
-        // makes the core re-extract — expensive, but correct and visible in its
-        // own logs. Omitting the declaration instead would silently disable
+        // at connector startup is normal and transient. An empty fingerprint is
+        // meant to cost a re-extraction — expensive, but correct and visible in
+        // its own logs. Omitting the declaration instead would silently disable
         // schema extraction AND the SQL gate for the whole session, with
         // nothing anywhere reporting that governance had stopped. Silent
         // disablement is the failure class this declaration exists to close, so
         // it must never be the response to a transient error.
+        //
+        // CAVEAT, true as of 2026-08-13: that re-extraction does not yet happen
+        // end to end. When the database recovers, this connector re-registers
+        // with the real catalog hash but with unchanged agents and tools — and
+        // baseline_fingerprint covers agents and tools only. The hub forwards
+        // the changed declaration (it stopped short-circuiting on the baseline
+        // alone), but the core then de-duplicates by that same unchanged
+        // fingerprint and does not re-persist the new catalog hash, so
+        // extraction stays pinned to the empty value until something the
+        // baseline DOES cover changes. Withdrawing this caveat is part of the
+        // core-side task that fixes the de-duplication; until then, treat an
+        // empty fingerprint as a transient state to get out of, not a free one.
         //
         // Null means "the fingerprint arrived"; anything else is warned about
         // below. The three wordings are deliberately distinct — "did not
