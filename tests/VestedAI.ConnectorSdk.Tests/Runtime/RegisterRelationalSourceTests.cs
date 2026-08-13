@@ -68,6 +68,61 @@ public sealed class RegisterUnreachableCatalogProvider : IRelationalSchemaProvid
 }
 
 /// <summary>
+/// A catalog that answers, but far too late — a cold SQL Server behind
+/// SqlClient's own 15s-connect + 30s-per-command defaults. Honours its
+/// cancellation token, as <see cref="ICatalogReader"/> requires and as the
+/// SDK's own <see cref="SqlServerProvider"/> does.
+/// </summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class RegisterSlowCatalogProvider : IRelationalSchemaProvider
+{
+    /// <summary>Far longer than any bound a test would set.</summary>
+    public static readonly TimeSpan Delay = TimeSpan.FromSeconds(40);
+
+    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
+        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
+
+    public async Task<string> CatalogFingerprintAsync(CancellationToken ct)
+    {
+        await Task.Delay(Delay, ct).ConfigureAwait(false);
+        return "a-fingerprint-nobody-should-ever-see";
+    }
+}
+
+/// <summary>
+/// Returns a DIFFERENT fingerprint on every call, so a test can tell a value
+/// read live this session from one cached at <c>Build()</c> and replayed.
+/// </summary>
+[RelationalSource(
+    Engine = "sqlserver",
+    DescribeTool = "rs.demo.describe_schema",
+    QueryTool = "rs.demo.query_sql",
+    SqlArg = "Sql")]
+public sealed class RegisterCountingFingerprintProvider : IRelationalSchemaProvider
+{
+    private int _calls;
+
+    /// <summary>How many times the catalog has been hashed.</summary>
+    public int Calls => Volatile.Read(ref _calls);
+
+    public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
+        => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
+
+    public Task<string> CatalogFingerprintAsync(CancellationToken ct)
+        => Task.FromResult($"catalog-{Interlocked.Increment(ref _calls)}");
+}
+
+/// <summary>
 /// Minimal credential handler so one connector can declare BOTH a credential
 /// schema and a relational source — the coexistence case.
 /// </summary>
@@ -124,16 +179,6 @@ public class RegisterRelationalSourceTests
         return doc.RootElement.GetProperty("connector_private_key_pkcs8_pem").GetString()!;
     }
 
-    private static async Task<int> RunSupervisorAsync(ConnectorApp app, int port, CancellationToken testCt)
-    {
-        using var signals = new SignalHandler();
-        using var reg = testCt.Register(() => signals.InternalCancelHook?.Invoke());
-
-        return await Supervisor
-            .RunAsync(app, "test-token", "127.0.0.1", port, insecure: true, signals)
-            .ConfigureAwait(false);
-    }
-
     // -----------------------------------------------------------------------
     // The round trip: both declarations arrive on ONE Register.
 
@@ -159,7 +204,7 @@ public class RegisterRelationalSourceTests
                 .UseInsecureTransport()
                 .Build();
 
-            var exit = await RunSupervisorAsync(app, server.Port, cts.Token).ConfigureAwait(false);
+            var exit = await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token).ConfigureAwait(false);
             Assert.Equal(78, exit);   // GoAway("revoked")
 
             var register = server.Capture.ReceivedRegister;
@@ -212,7 +257,7 @@ public class RegisterRelationalSourceTests
                 .UseInsecureTransport()
                 .Build();
 
-            await RunSupervisorAsync(app, server.Port, cts.Token).ConfigureAwait(false);
+            await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token).ConfigureAwait(false);
 
             var register = server.Capture.ReceivedRegister;
             Assert.NotNull(register);
@@ -253,7 +298,7 @@ public class RegisterRelationalSourceTests
                 .UseInsecureTransport()
                 .Build();
 
-            await RunSupervisorAsync(app, server.Port, cts.Token).ConfigureAwait(false);
+            await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token).ConfigureAwait(false);
 
             var register = server.Capture.ReceivedRegister;
             Assert.NotNull(register);
@@ -300,5 +345,151 @@ public class RegisterRelationalSourceTests
         var warning = Assert.Single(warnings);
         Assert.Contains(nameof(InvalidOperationException), warning);
         Assert.Contains(RegisterUnreachableCatalogProvider.Failure, warning);
+
+        // The converse of the timeout test below: these two conditions send an
+        // operator to different systems, so neither message may read as the
+        // other. Here the database ANSWERED, with an error.
+        Assert.DoesNotContain("did not answer within", warning);
+    }
+
+    // -----------------------------------------------------------------------
+    // The bound. A fingerprint fetched before Register is sent must not be
+    // allowed to outlast the hub's idle timer.
+
+    [Fact(Timeout = 10_000)]
+    public async Task Register_FingerprintOutlastsItsBound_StillRegistersWithAnEmptyFingerprint()
+    {
+        // Without a bound this is not a slow schema extraction, it is a dead
+        // connector: the hub's idle timer runs from HelloAck with Register as
+        // the next expected frame and the heartbeat not yet started, so it
+        // sends GoAway{reason:"idle"}, the supervisor reconnects, and every
+        // tool this connector exposes stays offline in a loop — logged only as
+        // idleness, which names nothing about the fingerprint.
+        //
+        // The bound is injected rather than waited out; the delay/bound ratio
+        // (40s vs 250ms) is the same shape as the real one (40s vs 10s).
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        var script = new FakeHubScript
+        {
+            AcceptRegister    = true,
+            ToolCalls         = Array.Empty<ScriptedToolCall>(),
+            FinalGoAwayReason = "revoked",
+        };
+
+        await FakeHubServer.RunAsync(script, async server =>
+        {
+            var app = ConnectorHost.CreateBuilder()
+                .ScanAssembly(AssemblyWith(typeof(RegisterSlowCatalogProvider)))
+                .UseInsecureTransport()
+                .Build();
+
+            var started = System.Diagnostics.Stopwatch.StartNew();
+
+            var (_, handshakeCompleted) = await SessionRunner
+                .RunOneSessionAsync(app, server.Port, cts.Token,
+                    fingerprintTimeout: TimeSpan.FromMilliseconds(250))
+                .ConfigureAwait(false);
+
+            started.Stop();
+
+            // The point of the bound. Asserted explicitly so a regression reads
+            // as "Register waited for the catalog" rather than as a flaky
+            // 10-second test timeout.
+            Assert.True(
+                started.Elapsed < TimeSpan.FromSeconds(5),
+                $"Register waited {started.Elapsed.TotalSeconds:0.#}s on a provider that never " +
+                $"answers; the fingerprint fetch is not bounded.");
+
+            var register = server.Capture.ReceivedRegister;
+            Assert.NotNull(register);
+            Assert.NotNull(register.RelationalSource);
+            Assert.Equal("sqlserver", register.RelationalSource.Engine);
+            Assert.Equal("rs.demo.query_sql", register.RelationalSource.QueryTool);
+            Assert.Equal("", register.RelationalSource.Fingerprint);
+
+            // Registration still succeeded — HandshakeCompleted is set only
+            // after an "accepted" RegisterAck.
+            Assert.True(handshakeCompleted);
+        });
+    }
+
+    [Fact]
+    public async Task ToProtoAsync_FingerprintOutlastsItsBound_WarnsAboutTheWaitNotAnError()
+    {
+        var warnings = new List<string>();
+
+        var decl = await Daemon.ToProtoAsync(
+            new RelationalSourceDeclaration(
+                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                typeof(RegisterSlowCatalogProvider)),
+            new RegisterSlowCatalogProvider(),
+            CancellationToken.None,
+            warnings.Add,
+            TimeSpan.FromMilliseconds(50));
+
+        Assert.Equal("", decl.Fingerprint);
+
+        var warning = Assert.Single(warnings);
+        Assert.Contains("did not answer within", warning);
+
+        // An operator must not read a silent database as a failing one: chasing
+        // a driver error that never happened is the wrong investigation. The
+        // cancellation is an implementation detail of the bound, not a fault
+        // the database reported.
+        Assert.DoesNotContain("Exception", warning);
+    }
+
+    // -----------------------------------------------------------------------
+    // Read live, per session — the claim BuildRegisterAsync's docblock makes.
+
+    [Fact(Timeout = 10_000)]
+    public async Task Register_ReadsTheFingerprintOncePerSession_NotOnceAtBuild()
+    {
+        // An implementation that hashed the catalog at Build() and replayed the
+        // value would pass every other test in this file, and would report a
+        // stale hash forever after a schema change — leaving the core certain
+        // it need not re-extract. The provider returns a different value per
+        // call, so a cached one is visible as the WRONG value, not merely as a
+        // call count.
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        var provider = new RegisterCountingFingerprintProvider();
+
+        var app = ConnectorHost.CreateBuilder()
+            .ScanAssembly(AssemblyWith())
+            .UseRelationalSchemaProvider(provider)
+            .UseInsecureTransport()
+            .Build();
+
+        var script = new FakeHubScript
+        {
+            AcceptRegister    = true,
+            ToolCalls         = Array.Empty<ScriptedToolCall>(),
+            FinalGoAwayReason = "revoked",
+        };
+
+        // Two sessions of the same connector — what the supervisor does across
+        // a reconnect, minus the backoff wait.
+        var first = await FakeHubServer.RunAsync(script, async server =>
+        {
+            await SessionRunner.RunOneSessionAsync(app, server.Port, cts.Token).ConfigureAwait(false);
+            return server.Capture.ReceivedRegister;
+        });
+
+        var second = await FakeHubServer.RunAsync(script, async server =>
+        {
+            await SessionRunner.RunOneSessionAsync(app, server.Port, cts.Token).ConfigureAwait(false);
+            return server.Capture.ReceivedRegister;
+        });
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.NotNull(first.RelationalSource);
+        Assert.NotNull(second.RelationalSource);
+
+        Assert.Equal("catalog-1", first.RelationalSource.Fingerprint);
+        Assert.Equal("catalog-2", second.RelationalSource.Fingerprint);
+        Assert.Equal(2, provider.Calls);
     }
 }

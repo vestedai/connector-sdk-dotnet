@@ -43,21 +43,6 @@ public class IntegrationTests
             .UseInsecureTransport()
             .Build();
 
-    // Helper: run Supervisor against a loopback fake hub with a short timeout
-    // so tests don't hang if something goes wrong.
-    private static async Task<int> RunSupervisorAsync(
-        ConnectorApp app,
-        int port,
-        CancellationToken testCt)
-    {
-        using var signals = new SignalHandler();
-
-        // If the test timeout fires, cancel the supervisor too.
-        using var reg = testCt.Register(() => signals.InternalCancelHook?.Invoke());
-
-        return await Supervisor.RunAsync(app, "test-token", "127.0.0.1", port, insecure: true, signals)
-            .ConfigureAwait(false);
-    }
 
     // ---------------------------------------------------------------------------
     // Test 1: Full roundtrip — assert exit 78 + sensitivity + tool response shape.
@@ -85,7 +70,7 @@ public class IntegrationTests
         await FakeHubServer.RunAsync(script, async server =>
         {
             var app = BuildApp();
-            var exitCode = await RunSupervisorAsync(app, server.Port, cts.Token)
+            var exitCode = await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token)
                 .ConfigureAwait(false);
 
             // GoAway("revoked") → supervisor exits 78
@@ -144,7 +129,7 @@ public class IntegrationTests
         await FakeHubServer.RunAsync(script, async server =>
         {
             var app = BuildApp();
-            var exitCode = await RunSupervisorAsync(app, server.Port, cts.Token)
+            var exitCode = await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token)
                 .ConfigureAwait(false);
 
             Assert.Equal(78, exitCode);
@@ -174,7 +159,7 @@ public class IntegrationTests
         await FakeHubServer.RunAsync(script, async server =>
         {
             var app = BuildApp();
-            var exitCode = await RunSupervisorAsync(app, server.Port, cts.Token)
+            var exitCode = await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token)
                 .ConfigureAwait(false);
 
             Assert.Equal(78, exitCode);
@@ -276,7 +261,7 @@ public class IntegrationTests
         await FakeHubServer.RunAsync(script, async server =>
         {
             var app = BuildApp();
-            var exitCode = await RunSupervisorAsync(app, server.Port, cts.Token)
+            var exitCode = await SessionRunner.RunSupervisorAsync(app, server.Port, cts.Token)
                 .ConfigureAwait(false);
 
             Assert.Equal(78, exitCode);

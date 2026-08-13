@@ -24,8 +24,22 @@ internal sealed class Daemon
     private readonly Action<Vested.V1.ToolCallRequest>? _dispatcher;
     private readonly VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? _credentialOps;
     private readonly SessionIdentity? _identity;
+    private readonly TimeSpan _fingerprintTimeout;
 
     private HeartbeatTimer? _heartbeat;
+
+    /// <summary>
+    /// How long <c>Register</c> waits for the catalog fingerprint before giving
+    /// up on it and registering without one.
+    /// </summary>
+    /// <remarks>
+    /// Well inside the hub's 30s idle timeout, which is already running: it
+    /// starts at HelloAck with Register as the next expected frame, and the
+    /// connector's heartbeat does not start until RegisterAck — so nothing
+    /// resets it while the fingerprint is being fetched. See
+    /// <see cref="ToProtoAsync"/> for what an unbounded wait here costs.
+    /// </remarks>
+    internal static readonly TimeSpan DefaultFingerprintTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>True after the handshake completes successfully.</summary>
     public bool HandshakeCompleted { get; private set; }
@@ -43,7 +57,10 @@ internal sealed class Daemon
         VestedAI.ConnectorSdk.Credential.CredentialOpDispatcher? credentialOps = null,
         // Filled in from HelloAck so the credential paths can verify the
         // envelope's identity binding. Null when no credential schema is declared.
-        SessionIdentity? identity = null)
+        SessionIdentity? identity = null,
+        // Defaults to DefaultFingerprintTimeout. Tests shorten it so a slow
+        // provider can be exercised without a slow test.
+        TimeSpan? fingerprintTimeout = null)
     {
         _app = app;
         _client = client;
@@ -51,6 +68,7 @@ internal sealed class Daemon
         _dispatcher = dispatcher;
         _credentialOps = credentialOps;
         _identity = identity;
+        _fingerprintTimeout = fingerprintTimeout ?? DefaultFingerprintTimeout;
     }
 
     /// <summary>Runs one connector session and returns an exit code (0, 1, or 78).</summary>
@@ -274,7 +292,8 @@ internal sealed class Daemon
         if (_app.RelationalSource is not null)
         {
             reg.RelationalSource = await ToProtoAsync(
-                _app.RelationalSource, _app.RelationalSchemaProvider, ct).ConfigureAwait(false);
+                _app.RelationalSource, _app.RelationalSchemaProvider, ct,
+                timeout: _fingerprintTimeout).ConfigureAwait(false);
         }
 
         return new ConnectorMsg { Register = reg };
@@ -290,11 +309,16 @@ internal sealed class Daemon
     /// tests pass a sink so the message can be asserted without touching
     /// process-global <see cref="Console"/> state.
     /// </param>
+    /// <param name="timeout">
+    /// How long to wait for the provider. Defaults to
+    /// <see cref="DefaultFingerprintTimeout"/>.
+    /// </param>
     internal static async Task<RelationalSourceDecl> ToProtoAsync(
         RelationalSourceDeclaration d,
         IRelationalSchemaProvider? provider,
         CancellationToken ct,
-        Action<string>? warn = null)
+        Action<string>? warn = null,
+        TimeSpan? timeout = null)
     {
         var decl = new RelationalSourceDecl
         {
@@ -302,6 +326,9 @@ internal sealed class Daemon
             DescribeTool = d.DescribeTool,
             QueryTool    = d.QueryTool,
             SqlArg       = d.SqlArg,
+            // proto3 would default this to "" anyway. Stated because the empty
+            // string is not an unset field here, it is the failure contract:
+            // everything below either overwrites it or deliberately leaves it.
             Fingerprint  = "",
         };
 
@@ -310,25 +337,50 @@ internal sealed class Daemon
         // a NullReferenceException is exactly the silent disablement below.
         if (provider is null) return decl;
 
+        // BOUNDED, and the bound is not a nicety. This runs BEFORE Register is
+        // sent, and the hub's 30s idle timer is already running: it starts at
+        // HelloAck with Register as the next expected frame, and the heartbeat
+        // does not start until RegisterAck, so nothing resets it meanwhile. A
+        // catalog scan is not cheap — thousands of entities for one company,
+        // and SqlClient's own defaults are 15s to connect plus 30s per command
+        // — so a cold database can outlast the idle timer. The hub then sends
+        // GoAway{reason:"idle"} before Register is ever sent, the supervisor
+        // reconnects, and it repeats: the connector's ENTIRE tool surface stays
+        // offline, and the only log line names idleness, not the fingerprint.
+        // Same silent-and-misattributed disablement as omitting the
+        // declaration, reached by hanging instead of by throwing.
+        var bound = timeout ?? DefaultFingerprintTimeout;
+        using var fpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        fpCts.CancelAfter(bound);
+
         try
         {
-            decl.Fingerprint = await provider.CatalogFingerprintAsync(ct).ConfigureAwait(false);
+            decl.Fingerprint = await provider.CatalogFingerprintAsync(fpCts.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             // DELIBERATE: emit the declaration anyway, with an empty
-            // fingerprint. A source database that is unreachable at connector
-            // startup is normal and transient. An empty fingerprint makes the
-            // core re-extract — expensive, but correct and visible in its own
-            // logs. Omitting the declaration instead would silently disable
-            // schema extraction AND the SQL gate for the whole session, with
-            // nothing anywhere reporting that governance had stopped. Silent
-            // disablement is the failure class this declaration exists to
-            // close, so it must never be the response to a transient error.
+            // fingerprint. A source database that is unreachable or cold at
+            // connector startup is normal and transient. An empty fingerprint
+            // makes the core re-extract — expensive, but correct and visible in
+            // its own logs. Omitting the declaration instead would silently
+            // disable schema extraction AND the SQL gate for the whole session,
+            // with nothing anywhere reporting that governance had stopped.
+            // Silent disablement is the failure class this declaration exists
+            // to close, so it must never be the response to a transient error.
+            //
+            // The bound expiring arrives here too, as a cancellation — which is
+            // why it needs no branch of its own, only its own wording: an
+            // operator must not read "did not answer" as "answered with an
+            // error", because those send you to different systems.
+            var cause = fpCts.IsCancellationRequested && !ct.IsCancellationRequested
+                ? $"it did not answer within {bound.TotalSeconds:0.###}s"
+                : $"{ex.GetType().Name}: {ex.Message}";
+
             (warn ?? Console.Error.WriteLine)(
                 $"[vested] catalog fingerprint unavailable for relational source " +
-                $"'{d.QueryTool}'; registering with an empty fingerprint, which makes the " +
-                $"platform re-extract the schema: {ex.GetType().Name}: {ex.Message}");
+                $"'{d.QueryTool}' — {cause}; registering with an empty fingerprint, " +
+                $"which makes the platform re-extract the schema");
         }
 
         return decl;
