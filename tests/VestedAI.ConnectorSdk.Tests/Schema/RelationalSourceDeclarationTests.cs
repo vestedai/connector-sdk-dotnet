@@ -217,6 +217,13 @@ public sealed class FixtureSingleScopeNoDefault : FixtureProviderBase { }
 [RelationalSource(Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql")]
 public sealed class FixtureNoScopesDeclared : FixtureProviderBase { }
 
+/// <summary>DefaultScope set with an empty Scopes list — must be accepted, silently. See the
+/// dedicated test below for why this is a pinned decision, not an accident.</summary>
+[RelationalSource(
+    Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
+    DefaultScope = "production")]
+public sealed class FixtureDefaultScopeNoScopes : FixtureProviderBase { }
+
 /// <summary>Several scopes with a valid default — must be accepted, and both must reach the wire.</summary>
 [RelationalSource(
     Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
@@ -685,6 +692,23 @@ public class RelationalSourceDeclarationTests
         var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureScopesWithValidDefault));
 
         Assert.Equal(new[] { "production", "erp_middleware_production" }, declared.Scopes);
+        Assert.Equal("production", declared.DefaultScope);
+    }
+
+    [Fact]
+    public void FromRelationalSourceType_DefaultScopeWithEmptyScopes_IsAcceptedSilently()
+    {
+        // ValidateScopes()'s second check guards on scopes.Count > 0 before
+        // comparing — copied verbatim from the brief, so this is spec
+        // behaviour, not a gap. Pinned deliberately: with no declared Scopes
+        // there is nothing to validate DefaultScope against, and both the
+        // hub's own registration check and the core's
+        // RelationalConnectorMap::defaultScopeFrom() already drop a default
+        // that names no extracted scope, so this SDK-side check has nothing
+        // useful to say here either way.
+        var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureDefaultScopeNoScopes));
+
+        Assert.Empty(declared.Scopes);
         Assert.Equal("production", declared.DefaultScope);
     }
 }
