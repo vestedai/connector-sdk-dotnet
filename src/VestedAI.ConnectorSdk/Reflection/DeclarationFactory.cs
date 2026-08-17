@@ -266,7 +266,14 @@ public static class DeclarationFactory
             QueryTool:    sourceAttr.QueryTool,
             SqlArg:       sourceAttr.SqlArg,
             Scopes:       scopes,
-            DefaultScope: sourceAttr.DefaultScope,
+            // With exactly one scope the SOLE scope is the only place an
+            // unqualified name can resolve, so declare it outright instead of
+            // whatever the attribute happened to say (including nothing).
+            // Kept identical to the PHP SDK so the same connector shape
+            // declares the same thing in both languages; here both values are
+            // compile-time constants, so unlike PHP this cannot drift per
+            // environment — it is parity, not a fix.
+            DefaultScope: scopes.Length == 1 ? scopes[0] : sourceAttr.DefaultScope,
             ProviderType: t);
     }
 
@@ -313,7 +320,14 @@ public static class DeclarationFactory
                 $"where its connection points. Name one of: {string.Join(", ", scopes)}");
         }
 
-        if (@default != "" && scopes.Count > 0 && !scopes.Contains(@default, StringComparer.Ordinal))
+        // Only meaningful with MORE THAN ONE scope. With zero or one there is
+        // nothing to disambiguate, and the caller emits the sole scope rather
+        // than this literal — so a mismatch changes nothing that ships.
+        // Throwing on it would make an attribute constant naming the
+        // PRODUCTION database break every deployment whose database is named
+        // anything else, tests included, for no gain in correctness. Mirrors
+        // the PHP SDK's DeclarationFactory::validateScopes().
+        if (scopes.Count > 1 && @default != "" && !scopes.Contains(@default, StringComparer.Ordinal))
         {
             throw new ArgumentException(
                 $"relational_source default_scope `{@default}` is not one of the declared scopes: " +

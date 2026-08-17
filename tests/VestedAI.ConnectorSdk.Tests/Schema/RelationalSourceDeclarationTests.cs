@@ -201,11 +201,22 @@ public sealed class FixtureMissingSqlArg : FixtureProviderBase { }
     Scopes = new[] { "production", "erp_middleware_production" })]
 public sealed class FixtureScopesNoDefault : FixtureProviderBase { }
 
-/// <summary>A default_scope naming something that is not one of Scopes — must throw.</summary>
+/// <summary>
+/// A default_scope naming something that is not one of SEVERAL Scopes — must
+/// throw. Two scopes, not one: with a single scope the declared default is
+/// ignored in favour of that scope, so a one-scope fixture here would assert a
+/// throw that no longer happens.
+/// </summary>
 [RelationalSource(
     Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
-    Scopes = new[] { "production" }, DefaultScope = "erp_middleware")]
+    Scopes = new[] { "production", "reporting" }, DefaultScope = "erp_middleware")]
 public sealed class FixtureDefaultScopeNotDeclared : FixtureProviderBase { }
+
+/// <summary>One scope, and a default naming a DIFFERENT one — the sole scope wins.</summary>
+[RelationalSource(
+    Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
+    Scopes = new[] { "test" }, DefaultScope = "production")]
+public sealed class FixtureSingleScopeMismatchedDefault : FixtureProviderBase { }
 
 /// <summary>One scope, no default — must be accepted.</summary>
 [RelationalSource(
@@ -673,7 +684,24 @@ public class RelationalSourceDeclarationTests
         var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureSingleScopeNoDefault));
 
         Assert.Equal(new[] { "ASG" }, declared.Scopes);
-        Assert.Equal("", declared.DefaultScope);
+        // The SOLE scope ships as the default even though the attribute names
+        // none: with one scope there is nothing to disambiguate, and saying so
+        // outright beats leaving the core to infer it. erp_bc is this shape.
+        Assert.Equal("ASG", declared.DefaultScope);
+    }
+
+    [Fact]
+    public void FromRelationalSourceType_SingleScopeMismatchedDefault_DeclaresTheSoleScope()
+    {
+        // Does NOT throw: with one scope the declared default carries no
+        // information, so a constant naming another environment's database is
+        // ignored rather than fatal. The PHP SDK relies on this to keep a
+        // hardcoded production name from breaking every other deployment;
+        // this mirror keeps both SDKs declaring the same thing.
+        var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureSingleScopeMismatchedDefault));
+
+        Assert.Equal(new[] { "test" }, declared.Scopes);
+        Assert.Equal("test", declared.DefaultScope);
     }
 
     [Fact]
