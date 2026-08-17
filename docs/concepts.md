@@ -21,6 +21,8 @@ Tool calls are request/response in v1. The handler receives already-deserialized
 
 Tool keys must also be namespaced: `myapp.products.search`, not `search`.
 
+A tool is **bound** to one or more agents. By default the namespace decides: `myapp.products.search` belongs to agent `myapp.products`. A tool may instead name its agents explicitly, which is how one declaration is shared across several instead of duplicated per namespace — see the API reference.
+
 `[Description]` attributes on `Args` properties flow directly into the generated `input_schema_json`, so the LLM sees field descriptions when deciding which arguments to supply.
 
 ## Sensitivity

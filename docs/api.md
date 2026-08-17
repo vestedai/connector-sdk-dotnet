@@ -31,7 +31,7 @@ Validates the collected declarations and returns a `ConnectorApp`.
 
 Validation performed at `Build()`:
 - Each `[Tool]` class must derive from `ToolHandler<,>`.
-- Tool key prefix must match an agent key + `.` (e.g. tool `myapp.orders.get` requires agent `myapp.orders`).
+- A tool that declares no `Agents` must have a key prefixed by an agent key + `.` (e.g. tool `myapp.orders.get` requires agent `myapp.orders`). A tool that names its `Agents` may sit outside every agent namespace — see [Binding a tool to agents](#binding-a-tool-to-agents).
 - `Sensitivity`, when non-empty, must be one of the canonical values; otherwise throws `ConnectorException`.
 - Duplicate agent or tool keys throw `ConnectorException`.
 
@@ -155,6 +155,24 @@ The input JSON Schema is auto-generated from the `TArgs` POCO via NJsonSchema. `
 | `Sensitivity` | string | `""` | Optional; see below. |
 | `DefaultDeadlineMs` | int | `30000` | Tool-call timeout in milliseconds. |
 | `MaxResultBytes` | int | `1048576` | Maximum byte length of the JSON result (1 MiB default). |
+| `Agents` | string[] | `[]` | Agent keys this tool binds to. Empty = the namespace-prefix rule. `["*"]` = every declared agent. See below. |
+
+### Binding a tool to agents
+
+By default a tool binds to the agent its key is namespaced under: `myapp.orders.get`
+belongs to agent `myapp.orders`, and nowhere else.
+
+To share one declaration across several agents, name them. The list is
+**authoritative, not additive** — the key's namespace confers nothing once a list
+is present, so a tool may live in one namespace and be callable only from another.
+`"*"` means every agent this connector declares, and cannot be combined with
+explicit keys.
+
+Refused before the worker dials the hub: an agent key this connector does not
+declare, `"*"` mixed with explicit keys, and a tool that neither matches an agent
+namespace nor names any agent (nothing could ever call it). Declaring a list that
+omits the agent named in the tool's own key is *legal* — it is how you say "lives
+here, callable from there" — and logs a startup warning so it is never silent.
 
 ### `Sensitivity` field
 
