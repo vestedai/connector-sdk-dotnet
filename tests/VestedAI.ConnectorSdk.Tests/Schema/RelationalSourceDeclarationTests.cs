@@ -193,6 +193,36 @@ public sealed class FixtureMissingQueryTool : FixtureProviderBase { }
 [RelationalSource(Engine = "sqlserver", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql")]
 public sealed class FixtureMissingSqlArg : FixtureProviderBase { }
 
+// --- Task 9 (L3e): scopes/default_scope bootstrap forcing function ----------
+
+/// <summary>Several scopes, no default — must throw.</summary>
+[RelationalSource(
+    Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
+    Scopes = new[] { "production", "erp_middleware_production" })]
+public sealed class FixtureScopesNoDefault : FixtureProviderBase { }
+
+/// <summary>A default_scope naming something that is not one of Scopes — must throw.</summary>
+[RelationalSource(
+    Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
+    Scopes = new[] { "production" }, DefaultScope = "erp_middleware")]
+public sealed class FixtureDefaultScopeNotDeclared : FixtureProviderBase { }
+
+/// <summary>One scope, no default — must be accepted.</summary>
+[RelationalSource(
+    Engine = "sqlserver", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
+    Scopes = new[] { "ASG" })]
+public sealed class FixtureSingleScopeNoDefault : FixtureProviderBase { }
+
+/// <summary>No scopes at all — backward compatibility: today's connectors declare neither field.</summary>
+[RelationalSource(Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql")]
+public sealed class FixtureNoScopesDeclared : FixtureProviderBase { }
+
+/// <summary>Several scopes with a valid default — must be accepted, and both must reach the wire.</summary>
+[RelationalSource(
+    Engine = "mysql", DescribeTool = "rs.demo.describe_schema", QueryTool = "rs.demo.query_sql", SqlArg = "Sql",
+    Scopes = new[] { "production", "erp_middleware_production" }, DefaultScope = "production")]
+public sealed class FixtureScopesWithValidDefault : FixtureProviderBase { }
+
 /// <summary>Shared no-op body for the fixtures above.</summary>
 public abstract class FixtureProviderBase : IRelationalSchemaProvider
 {
@@ -597,5 +627,64 @@ public class RelationalSourceDeclarationTests
             .ToArray();
 
         Assert.DoesNotContain("Fingerprint", propertyNames);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 9 (L3e): the forcing function. FromRelationalSourceType (called
+    // from both ScanAssembly and UseRelationalSchemaProvider, i.e. always
+    // before the worker dials the hub) throws when a relational source
+    // declares more than one scope without a DefaultScope, or names a
+    // DefaultScope that is not one of the declared scopes.
+    //
+    // Same seam and same reasoning as ConnectorHostBuilder.Build()'s
+    // credential-key check ("Fail at startup rather than at the first
+    // credential op: without a key every check would fail later with a
+    // puzzling message.") — this failure belongs on the connector author's
+    // deploy, not on a model's tool call at 00:30 in production.
+
+    [Fact]
+    public void FromRelationalSourceType_SeveralScopesNoDefault_ThrowsArgumentException()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => DeclarationFactory.FromRelationalSourceType(typeof(FixtureScopesNoDefault)));
+
+        Assert.Contains("default_scope", ex.Message);
+    }
+
+    [Fact]
+    public void FromRelationalSourceType_DefaultScopeNotAmongScopes_ThrowsArgumentException()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => DeclarationFactory.FromRelationalSourceType(typeof(FixtureDefaultScopeNotDeclared)));
+
+        Assert.Contains("default_scope", ex.Message);
+    }
+
+    [Fact]
+    public void FromRelationalSourceType_OneScopeNoDefault_IsAccepted()
+    {
+        var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureSingleScopeNoDefault));
+
+        Assert.Equal(new[] { "ASG" }, declared.Scopes);
+        Assert.Equal("", declared.DefaultScope);
+    }
+
+    [Fact]
+    public void FromRelationalSourceType_NoScopesAtAll_IsAccepted()
+    {
+        // Backward compatibility: today's connectors declare neither field.
+        var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureNoScopesDeclared));
+
+        Assert.Empty(declared.Scopes);
+        Assert.Equal("", declared.DefaultScope);
+    }
+
+    [Fact]
+    public void FromRelationalSourceType_ScopesWithValidDefault_CarriesBothThrough()
+    {
+        var declared = DeclarationFactory.FromRelationalSourceType(typeof(FixtureScopesWithValidDefault));
+
+        Assert.Equal(new[] { "production", "erp_middleware_production" }, declared.Scopes);
+        Assert.Equal("production", declared.DefaultScope);
     }
 }

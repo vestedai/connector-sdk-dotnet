@@ -172,6 +172,47 @@ Three things worth knowing:
   fingerprint costs a re-extraction; a dropped declaration would silently
   disable extraction altogether.
 
+#### Multiple scopes need a `DefaultScope`
+
+A source can span more than one database or company — Business Central is the
+common case, one source spanning several companies. When it does, an
+**unqualified** table name in a query is ambiguous — the platform cannot
+guess which scope it belongs to — so `[RelationalSource]` takes `Scopes` and
+`DefaultScope`:
+
+```csharp
+[RelationalSource(
+    Engine       = "sqlserver",
+    DescribeTool = "erp_bc.data.describe_schema",
+    QueryTool    = "erp_bc.data.run_sql",
+    SqlArg       = "Sql",
+    Scopes       = new[] { "CRONUS-USA", "CRONUS-UK" },
+    DefaultScope = "CRONUS-USA")]
+public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
+```
+
+Two invariants are enforced at bootstrap — inside `Build()`, before the
+worker ever dials the hub — not at query time:
+
+- **More than one entry in `Scopes` with no `DefaultScope`** throws
+  `ArgumentException`. A single-scope (or scope-less) source may leave
+  `DefaultScope` unset.
+- **A `DefaultScope` naming something not in `Scopes`** throws
+  `ArgumentException` too.
+
+`Scopes` and `DefaultScope` are declared statically on the attribute, unlike
+`ScopesAsync` on the provider: `Build()` must validate them at bootstrap,
+before any extraction has run, which rules out a live, I/O-bound call. The
+PHP SDK enforces the identical pair of checks — count-greater-than-one with
+no default, and a default naming something undeclared — with the same
+message content, so a connector author moving between the two SDKs gets the
+same guidance.
+
+`DefaultScope` decides **only** what an unqualified name means, and nothing
+else: a **qualified** `scope.table` reference is never re-pointed at the
+default, and a query joining across two scopes is unaffected by it — each
+side of the join still resolves in its own scope.
+
 ## What This Is
 
 A **connector** is a long-lived worker process that registers one or more agents with the Vested AI hub. Each agent carries a model selection, a set of instruction blocks, and a set of tool definitions. Admins can override instruction bodies and disable tools in the admin UI; the connector's declared baseline is the floor that overrides are layered on top of. The hub routes LLM tool calls back to the connector over the same stream; the connector dispatches them to your handler code and returns results.

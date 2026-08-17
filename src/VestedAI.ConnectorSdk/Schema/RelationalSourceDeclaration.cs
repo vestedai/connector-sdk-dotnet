@@ -14,6 +14,12 @@ namespace VestedAI.ConnectorSdk.Schema;
 /// <param name="DescribeTool">Rowset tool returning the canonical schema.</param>
 /// <param name="QueryTool">The free-form SQL tool the core's gate governs.</param>
 /// <param name="SqlArg">Which argument of <paramref name="QueryTool"/> carries the SQL.</param>
+/// <param name="Scopes">The databases/companies this source spans. Empty for a scope-less source.</param>
+/// <param name="DefaultScope">
+/// Which of <paramref name="Scopes"/> an unqualified table name resolves in. Validated against
+/// <paramref name="Scopes"/> in <see cref="Reflection.DeclarationFactory.FromRelationalSourceType"/>,
+/// so a declaration reaching here already satisfies both bootstrap invariants.
+/// </param>
 /// <param name="ProviderType">
 /// The annotated class. The SDK constructs it only when no ready-made instance
 /// was supplied to <c>UseRelationalSchemaProvider</c>.
@@ -23,4 +29,6 @@ public sealed record RelationalSourceDeclaration(
     string DescribeTool,
     string QueryTool,
     string SqlArg,
+    IReadOnlyList<string> Scopes,
+    string DefaultScope,
     Type ProviderType);

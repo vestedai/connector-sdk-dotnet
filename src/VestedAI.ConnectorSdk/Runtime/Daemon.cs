@@ -330,7 +330,12 @@ internal sealed class Daemon
             // string is not an unset field here, it is the failure contract:
             // everything below either overwrites it or deliberately leaves it.
             Fingerprint  = "",
+            // Already validated at bootstrap (DeclarationFactory.ValidateScopes): a
+            // multi-scope source cannot reach here without a DefaultScope that is
+            // itself one of Scopes, so this is a straight pass-through onto the wire.
+            DefaultScope = d.DefaultScope,
         };
+        decl.Scopes.AddRange(d.Scopes);
 
         // Build() constructs a provider for every declaration it accepts, so
         // this is unreachable in practice — but losing the whole declaration to

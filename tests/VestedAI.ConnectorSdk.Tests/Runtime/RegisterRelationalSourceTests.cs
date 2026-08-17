@@ -379,6 +379,43 @@ public class RegisterRelationalSourceTests
     }
 
     // -----------------------------------------------------------------------
+    // Task 9 (L3e): Scopes and DefaultScope reach the wire message.
+    //
+    // Already validated at bootstrap by the time ToProtoAsync runs (a
+    // multi-scope declaration cannot exist here without a valid
+    // DefaultScope) — this proves the pass-through, not the validation.
+
+    [Fact]
+    public async Task ToProtoAsync_ScopesAndDefaultScope_ReachTheWireMessage()
+    {
+        var decl = await Daemon.ToProtoAsync(
+            new RelationalSourceDeclaration(
+                "mysql", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                new[] { "production", "erp_middleware_production" }, "production",
+                typeof(RegisterLiveFingerprintProvider)),
+            new RegisterLiveFingerprintProvider(),
+            CancellationToken.None);
+
+        Assert.Equal(new[] { "production", "erp_middleware_production" }, decl.Scopes);
+        Assert.Equal("production", decl.DefaultScope);
+    }
+
+    [Fact]
+    public async Task ToProtoAsync_NoScopesDeclared_LeavesScopesEmptyAndDefaultScopeBlank()
+    {
+        var decl = await Daemon.ToProtoAsync(
+            new RelationalSourceDeclaration(
+                "mysql", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                Array.Empty<string>(), "",
+                typeof(RegisterLiveFingerprintProvider)),
+            new RegisterLiveFingerprintProvider(),
+            CancellationToken.None);
+
+        Assert.Empty(decl.Scopes);
+        Assert.Equal("", decl.DefaultScope);
+    }
+
+    // -----------------------------------------------------------------------
     // The warning that makes the empty fingerprint diagnosable.
 
     [Fact]
@@ -392,7 +429,7 @@ public class RegisterRelationalSourceTests
 
         var decl = await Daemon.ToProtoAsync(
             new RelationalSourceDeclaration(
-                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql", Array.Empty<string>(), "",
                 typeof(RegisterUnreachableCatalogProvider)),
             new RegisterUnreachableCatalogProvider(),
             CancellationToken.None,
@@ -480,7 +517,7 @@ public class RegisterRelationalSourceTests
 
         var decl = await Daemon.ToProtoAsync(
             new RelationalSourceDeclaration(
-                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql", Array.Empty<string>(), "",
                 typeof(RegisterSlowCatalogProvider)),
             new RegisterSlowCatalogProvider(),
             CancellationToken.None,
@@ -574,7 +611,7 @@ public class RegisterRelationalSourceTests
 
         var decl = await Daemon.ToProtoAsync(
             new RelationalSourceDeclaration(
-                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                "sqlserver", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql", Array.Empty<string>(), "",
                 typeof(RegisterUncooperativeFailingProvider)),
             new RegisterUncooperativeFailingProvider(),
             CancellationToken.None,

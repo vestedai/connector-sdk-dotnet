@@ -201,6 +201,15 @@ public static class DeclarationFactory
     /// <c>Engine</c>, <c>DescribeTool</c>, <c>QueryTool</c> and <c>SqlArg</c> is
     /// blank.
     /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <c>Scopes</c> has more than one entry and <c>DefaultScope</c>
+    /// is blank, or when <c>DefaultScope</c> is set but is not one of
+    /// <c>Scopes</c>. Same seam and same reasoning as
+    /// <see cref="ConnectorHostBuilder.Build"/>'s credential-key check: refuse
+    /// at startup, on the connector author's own deploy, rather than let an
+    /// unqualified table name resolve ambiguously the first time a model calls
+    /// the query tool in production.
+    /// </exception>
     public static RelationalSourceDeclaration FromRelationalSourceType(Type t)
     {
         var sourceAttr = t.GetCustomAttributes(typeof(RelationalSourceAttribute), inherit: false)
@@ -248,11 +257,16 @@ public static class DeclarationFactory
         RequireValue(t, nameof(RelationalSourceAttribute.SqlArg), sourceAttr.SqlArg,
             "which argument of QueryTool carries the SQL text");
 
+        var scopes = sourceAttr.Scopes ?? Array.Empty<string>();
+        ValidateScopes(scopes, sourceAttr.DefaultScope);
+
         return new RelationalSourceDeclaration(
             Engine:       sourceAttr.Engine,
             DescribeTool: sourceAttr.DescribeTool,
             QueryTool:    sourceAttr.QueryTool,
             SqlArg:       sourceAttr.SqlArg,
+            Scopes:       scopes,
+            DefaultScope: sourceAttr.DefaultScope,
             ProviderType: t);
     }
 
@@ -262,6 +276,48 @@ public static class DeclarationFactory
         {
             throw new ConnectorException(
                 $"Relational schema provider {t.FullName} declares no {field} — {what}.");
+        }
+    }
+
+    /// <summary>
+    /// The forcing function: a relational source spanning more than one scope
+    /// MUST name a DefaultScope, and a named DefaultScope must be one of the
+    /// scopes actually declared.
+    /// </summary>
+    /// <remarks>
+    /// Same seam and same reasoning as <see cref="ConnectorHostBuilder.Build"/>'s
+    /// credential-key check: refuse at startup, on the connector author's own
+    /// deploy, rather than let an unqualified table name resolve ambiguously
+    /// (or not at all) the first time a model calls the query tool in
+    /// production. Both checks below are purely local — no network, nothing to
+    /// await — so there is no cost to running them here, before the worker
+    /// ever dials the hub.
+    ///
+    /// Deliberately <see cref="ArgumentException"/> rather than this file's
+    /// usual <see cref="ConnectorException"/>: the mistake here is a bad VALUE
+    /// relationship between two fields the author supplied, not a missing
+    /// declaration or a cross-reference to a tool that does not exist — the
+    /// PHP SDK throws the equivalent generic argument exception
+    /// (<c>InvalidArgumentException</c>) for this identical check, so a
+    /// connector author moving between the two SDKs gets the same guidance.
+    /// </remarks>
+    private static void ValidateScopes(IReadOnlyList<string> scopes, string defaultScope)
+    {
+        var @default = defaultScope ?? "";
+
+        if (scopes.Count > 1 && @default == "")
+        {
+            throw new ArgumentException(
+                $"relational_source declares {scopes.Count} scopes but no default_scope. " +
+                "An unqualified table name has to resolve somewhere, and only this connector knows " +
+                $"where its connection points. Name one of: {string.Join(", ", scopes)}");
+        }
+
+        if (@default != "" && scopes.Count > 0 && !scopes.Contains(@default, StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                $"relational_source default_scope `{@default}` is not one of the declared scopes: " +
+                string.Join(", ", scopes));
         }
     }
 

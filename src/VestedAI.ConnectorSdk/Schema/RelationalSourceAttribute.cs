@@ -60,6 +60,23 @@ namespace VestedAI.ConnectorSdk.Schema;
 ///     .RunFromEnvironmentAsync();
 /// </code>
 /// </example>
+/// <example>
+/// A source spanning more than one scope (multiple BC companies, multiple
+/// MySQL databases) MUST set <see cref="DefaultScope"/>: it is the only party
+/// that knows which scope an UNQUALIFIED table name should resolve in, and
+/// <c>Build()</c> throws <see cref="ArgumentException"/> rather than let that
+/// ambiguity reach a query at runtime. A single-scope (or scope-less) source
+/// may leave it blank.
+/// <code>
+/// [RelationalSource(Engine = "sqlserver",
+///                   DescribeTool = "erp_bc.describe_schema",
+///                   QueryTool = "erp_bc.query_sql",
+///                   SqlArg = "Sql",
+///                   Scopes = new[] { "CRONUS-USA", "CRONUS-UK" },
+///                   DefaultScope = "CRONUS-USA")]
+/// public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
+/// </code>
+/// </example>
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class RelationalSourceAttribute : Attribute
 {
@@ -89,4 +106,25 @@ public sealed class RelationalSourceAttribute : Attribute
     /// silently gates nothing.
     /// </summary>
     public string SqlArg { get; set; } = "";
+
+    /// <summary>
+    /// The databases (MySQL) or companies (Business Central) this source
+    /// spans. Declared here, statically, because <c>Build()</c> must validate
+    /// against it at BOOTSTRAP — before any extraction has happened and
+    /// before the worker ever dials the hub — which rules out sourcing this
+    /// from the live, I/O-bound <see cref="IRelationalSchemaProvider.ScopesAsync"/>.
+    /// Leave empty for a source with no meaningful scope split.
+    /// </summary>
+    public string[] Scopes { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Which of <see cref="Scopes"/> an UNQUALIFIED table name resolves in.
+    /// Required when <see cref="Scopes"/> has more than one entry —
+    /// <c>Build()</c> throws <see cref="ArgumentException"/> otherwise.
+    ///
+    /// This decides what an unqualified name means and NOTHING else. A
+    /// qualified <c>scope.table</c> is never re-pointed at this default, and
+    /// a cross-scope join resolves each side in its own scope.
+    /// </summary>
+    public string DefaultScope { get; set; } = "";
 }
