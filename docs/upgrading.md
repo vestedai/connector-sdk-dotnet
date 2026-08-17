@@ -63,6 +63,45 @@ The following are PHP-, Python-, or Node-specific implementation details. They a
 
 ---
 
+## v0.6.0 Release Notes
+
+### v0.6.0 — `[RelationalSource]` declares `Scopes`/`DefaultScope` — SOURCE-BREAKING
+
+`[RelationalSource]` gains two new properties naming which databases/companies a connector's relational source spans and, when it spans more than one, which one an unqualified table name resolves in:
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `Scopes` | `string[]` | `Array.Empty<string>()` | The databases (MySQL) or companies (Business Central) this source spans. Declared statically on the attribute — not read from the live, I/O-bound `IRelationalSchemaProvider.ScopesAsync` — because `Build()` must validate it synchronously at bootstrap, before any extraction has happened and before the worker ever dials the hub. Empty for a source with no meaningful scope split; existing connectors are unaffected. |
+| `DefaultScope` | `string` | `""` | Which of `Scopes` an unqualified table name resolves in. Required when `Scopes` has more than one entry. |
+
+Adding these two properties to the attribute itself is source-compatible — `[RelationalSource(Engine = ..., ...)]` call sites that do not set them keep compiling exactly as before, C# attributes being named-property construction rather than positional.
+
+**The source-breaking change is in `RelationalSourceDeclaration`, the internal record `DeclarationFactory` builds from the attribute.** `Scopes` and `DefaultScope` were inserted as two new **positional** record parameters *before* `ProviderType`:
+
+```diff
+ public sealed record RelationalSourceDeclaration(
+     string Engine,
+     string DescribeTool,
+     string QueryTool,
+     string SqlArg,
++    IReadOnlyList<string> Scopes,
++    string DefaultScope,
+     Type ProviderType);
+```
+
+Any code constructing `RelationalSourceDeclaration` positionally — the record is `public`, so this includes test doubles and any downstream code that built one directly rather than through `DeclarationFactory.FromRelationalSourceType` — fails to compile until the two new arguments are inserted in the same position, or the call is rewritten to named arguments.
+
+**`ConnectorHostBuilder.Build()` can now throw where it previously could not.** The chain from `ScanAssembly`/`UseRelationalSchemaProvider` through `Build()` validates two invariants at bootstrap, before the worker ever dials the hub, via `DeclarationFactory.FromRelationalSourceType` → `ValidateScopes`, and throws `ArgumentException` (not this file's usual `ConnectorException` — the mistake is a bad VALUE relationship between two fields the author supplied, not a missing declaration):
+
+1. `scopes.Count > 1 && defaultScope == ""` — a source spanning more than one scope must name a default; a `[RelationalSource]` type that used to build cleanly now fails at bootstrap if it declares two or more scopes with no `DefaultScope`.
+2. `defaultScope != "" && !scopes.Contains(defaultScope)` — a named default must be one of the declared scopes.
+
+Same seam and same reasoning as the existing credential-keyring check (`ConnectorHostBuilder.Build()` throwing when a `[Credential]` handler is registered without a private key): refuse on the connector author's own deploy, with a stack trace, rather than let an unqualified table name resolve ambiguously the first time a model calls the query tool in production. A connector declaring neither property is completely unaffected — `Scopes` comes back empty, `DefaultScope` comes back `""`, and neither check can fire. The PHP SDK throws the equivalent generic argument exception (`InvalidArgumentException`) for the identical two invariants, so a connector author moving between the two SDKs gets the same guidance.
+
+No other public API changed. dotnet 0.5.0 → 0.6.0. Minor bump, not a patch: the record's positional shape is a compile-time break for any direct constructor caller, and a multi-scope provider that built cleanly under 0.5.x can now throw at its next `Build()`. Intended git tag: `v0.6.0`.
+
+---
+
 ## v0.2.0 Release Notes
 
 ### v0.2.0 — ERP Identity on ToolContext (L-5)

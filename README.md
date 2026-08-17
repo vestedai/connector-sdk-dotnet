@@ -13,7 +13,7 @@ Connect any .NET service to the Vested AI platform. The SDK opens a long-lived g
 dotnet add package VestedAI.ConnectorSdk
 ```
 
-Requires .NET 8 (LTS). Or run the Docker image: `vestedai/vested-ai-connector-sdk-dotnet:0.5.0` (also `:latest`, multi-arch amd64/arm64).
+Requires .NET 8 (LTS). Or run the Docker image: `vestedai/vested-ai-connector-sdk-dotnet:0.6.0` (also `:latest`, multi-arch amd64/arm64).
 
 ## Connector Snippet
 
@@ -233,7 +233,7 @@ This differs from writing your own LLM client. The connector does not call the L
 
 ## License + Status
 
-MIT. Current release: **v0.5.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity, `[Credential]` and `[RelationalSource]` Register declarations). On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
+MIT. Current release: **v0.6.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity, `[Credential]` and `[RelationalSource]` Register declarations, `[RelationalSource]` scopes/defaultScope with a bootstrap throw). On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
 
 ## Other language SDKs
 
