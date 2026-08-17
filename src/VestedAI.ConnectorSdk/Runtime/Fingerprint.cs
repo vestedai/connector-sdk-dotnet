@@ -70,7 +70,14 @@ internal static class Fingerprint
                     .ToList(),
                 ["key"]          = a.Key,
                 ["model"]        = a.Model,
-                ["model_config"] = (object?)null,
+                // EMPTY OBJECT, not null. python defaults model_config to {} and
+                // node to the declaration's own value ({} in practice), so a null
+                // here made dotnet's fingerprint differ from both for every
+                // declaration set that has ever existed — measured 6e7cd984… on
+                // node/python against af900c3f… here, for identical input.
+                // [Agent] exposes no model config, so the value is always empty;
+                // {} is both the matching and the semantically correct emission.
+                ["model_config"] = (object?)new SortedDictionary<string, object?>(StringComparer.Ordinal),
                 ["name"]         = !string.IsNullOrEmpty(a.Name) ? a.Name : a.Key,
                 ["status"]       = a.Status,
             })

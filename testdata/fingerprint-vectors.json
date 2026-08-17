@@ -1,0 +1,113 @@
+{
+  "_comment": "Canonical cross-SDK baseline_fingerprint vectors. See testdata/README.md. Never hand-edit a per-SDK copy.",
+  "vectors": [
+    {
+      "name": "empty",
+      "agents": [],
+      "tools": [],
+      "expected_sha256": "c258c48ae070c5f9f6b08a9468de9d1c3aa651537bf3637a63e9d14c7c00f3b1"
+    },
+    {
+      "name": "single-agent-no-tools",
+      "agents": [
+        {
+          "key": "erp.data",
+          "name": "erp.data",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        }
+      ],
+      "tools": [],
+      "expected_sha256": "6e7cd9845ad94d8266b557fb3f3c8ec407e999e075c1fcabf566ad4ff1e1dfb2"
+    },
+    {
+      "name": "ordinal-ordering",
+      "agents": [
+        {
+          "key": "erp.data_ops",
+          "name": "erp.data_ops",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        },
+        {
+          "key": "erp.Data",
+          "name": "erp.Data",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        },
+        {
+          "key": "erp.dataX",
+          "name": "erp.dataX",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        },
+        {
+          "key": "erp.data",
+          "name": "erp.data",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        }
+      ],
+      "tools": [],
+      "expected_sha256": "c69acfa5e5a7149921fabac819d0b19c32d66c824091851d002245f4f71aad56"
+    },
+    {
+      "name": "agent-with-instructions-and-tools",
+      "agents": [
+        {
+          "key": "erp.data",
+          "name": "BC Data",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": [
+            {
+              "type": "system",
+              "position": 0,
+              "body": "You are helpful.",
+              "format": "markdown"
+            },
+            {
+              "type": "user",
+              "position": 1,
+              "body": "Be concise.",
+              "format": "markdown"
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "key": "erp.data.run_sql",
+          "name": "run_sql",
+          "description": "runs sql",
+          "input_schema": {
+            "type": "object",
+            "properties": {}
+          },
+          "output_schema": null,
+          "default_deadline_ms": 30000,
+          "max_result_bytes": 1048576,
+          "sensitivity": "read"
+        }
+      ],
+      "expected_sha256": "3072f9cd5814f9aa5de794bec7ca588cb366e6db19b3dcbf937ceac32ca9163d"
+    }
+  ]
+}
