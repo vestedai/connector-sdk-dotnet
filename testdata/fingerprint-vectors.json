@@ -21,7 +21,7 @@
         }
       ],
       "tools": [],
-      "expected_sha256": "6e7cd9845ad94d8266b557fb3f3c8ec407e999e075c1fcabf566ad4ff1e1dfb2"
+      "expected_sha256": "fa657d9850f7debea8a03de2fe074dbb639358b2a33f468783f4e17a029d5039"
     },
     {
       "name": "ordinal-ordering",
@@ -64,7 +64,7 @@
         }
       ],
       "tools": [],
-      "expected_sha256": "c69acfa5e5a7149921fabac819d0b19c32d66c824091851d002245f4f71aad56"
+      "expected_sha256": "71a182cee2bd823da23fd0d198dd314816287910329ac63cf5eebd8ad86d2e3c"
     },
     {
       "name": "agent-with-instructions-and-tools",
@@ -107,7 +107,49 @@
           "sensitivity": "read"
         }
       ],
-      "expected_sha256": "3072f9cd5814f9aa5de794bec7ca588cb366e6db19b3dcbf937ceac32ca9163d"
+      "expected_sha256": "34000f8f0ec4f8ae28a83cba7d91187fbedfef7b8982b2a6832afc72a1e9d36c"
+    },
+    {
+      "name": "shared-tool-two-agents",
+      "agents": [
+        {
+          "key": "erp.data",
+          "name": "erp.data",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        },
+        {
+          "key": "erp.retail",
+          "name": "erp.retail",
+          "model": "openai:gpt-4o",
+          "model_config": {},
+          "description": "d",
+          "status": "active",
+          "instructions": []
+        }
+      ],
+      "tools": [
+        {
+          "key": "erp.data.run_sql",
+          "name": "run_sql",
+          "description": "runs sql",
+          "input_schema": {
+            "type": "object"
+          },
+          "output_schema": null,
+          "default_deadline_ms": 30000,
+          "max_result_bytes": 1048576,
+          "sensitivity": "read",
+          "agents": [
+            "erp.data",
+            "erp.retail"
+          ]
+        }
+      ],
+      "expected_sha256": "cf0b271dea1f99d4dcfc42fe2b45aba89b0c29b394a32ebc4d2a4da3f8f39ef1"
     }
   ]
 }

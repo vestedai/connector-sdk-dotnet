@@ -256,8 +256,13 @@ public sealed class ConnectorHostBuilder
     /// </exception>
     public ConnectorApp Build()
     {
-        var agentKeys = _agents.Select(a => a.Key).ToHashSet(StringComparer.Ordinal);
-        ValidateToolAgentPrefixes(agentKeys, _tools);
+        // Refuses an agent key this connector does not declare, "*" mixed with
+        // explicit keys, and a tool that neither matches an agent namespace nor
+        // names any agent. Warnings (a tool excluded from the agent its own key
+        // names) go to stderr, matching the SDK's other startup diagnostics.
+        ToolBinding.Validate(
+            _agents, _tools,
+            message => Console.Error.WriteLine($"[vested] {message}"));
 
         // A connector that declares no credential schema stays entirely
         // unaffected: no opener, no handler, and no credential_schema on
@@ -342,8 +347,12 @@ public sealed class ConnectorHostBuilder
         IUserCredentialHandler? credentialHandler = null,
         CredentialOpener? credentialOpener = null)
     {
-        var agentKeys = agents.Select(a => a.Key).ToHashSet(StringComparer.Ordinal);
-        ValidateToolAgentPrefixes(agentKeys, tools);
+        // The SAME validation Build() runs. A test seam that validates
+        // differently from production is a test that cannot catch production.
+        ToolBinding.Validate(
+            agents, tools,
+            message => Console.Error.WriteLine($"[vested] {message}"));
+
         return new ConnectorApp(
             agents, tools, insecure, credential, credentialHandler, credentialOpener);
     }
@@ -351,23 +360,12 @@ public sealed class ConnectorHostBuilder
     // ---------------------------------------------------------------------------
     // Shared validation logic
 
-    private static void ValidateToolAgentPrefixes(
-        IReadOnlySet<string> agentKeys,
-        IReadOnlyDictionary<string, ToolDeclaration> tools)
-    {
-        foreach (var toolKey in tools.Keys)
-        {
-            bool hasMatchingAgent = agentKeys.Any(
-                agentKey => toolKey.StartsWith(agentKey + ".", StringComparison.Ordinal));
-
-            if (!hasMatchingAgent)
-            {
-                throw new ConnectorException(
-                    $"tool '{toolKey}' has no matching agent " +
-                    $"(key must start with '<agentKey>.')");
-            }
-        }
-    }
+    // ValidateToolAgentPrefixes lived here and required EVERY tool key to sit
+    // under some agent's namespace. ToolBinding.Validate supersedes it: that
+    // rule is now correct only for a tool that names no agents, because a tool
+    // that declares its own Agents list is legitimately allowed to live outside
+    // all of their namespaces — which is what makes a shared `erp.shared.*`
+    // tool expressible at all.
 
     /// <summary>
     /// Cross-checks a relational source against the tools the connector actually

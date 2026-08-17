@@ -46,6 +46,12 @@ public sealed class ToolDeclaration
     public bool IsPaginated { get; init; }
 
     /// <summary>
+    /// Agent keys this tool binds to, from <see cref="ToolAttribute.Agents"/>.
+    /// Empty = the namespace-prefix rule. See <see cref="ToolBinding"/>.
+    /// </summary>
+    public IReadOnlyList<string> Agents { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Create a handler instance and delegate to its InvokeBoxedAsync.
     /// The handler is instantiated fresh per call (stateless handlers expected).
     /// </summary>

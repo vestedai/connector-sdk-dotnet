@@ -102,6 +102,9 @@ public class FingerprintVectorsTests
                     MaxResultBytes    = t.GetProperty("max_result_bytes").GetInt32(),
                     InputSchemaJson   = t.GetProperty("input_schema").GetRawText(),
                     OutputSchemaJson  = output.ValueKind == JsonValueKind.Null ? null : output.GetRawText(),
+                    Agents            = t.TryGetProperty("agents", out var ag)
+                                        ? ag.EnumerateArray().Select(x => x.GetString()!).ToArray()
+                                        : Array.Empty<string>(),
                     HandlerType       = typeof(object),
                     ArgsType          = typeof(object),
                     ResultType        = typeof(object),

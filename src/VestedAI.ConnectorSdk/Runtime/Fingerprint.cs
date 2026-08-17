@@ -47,6 +47,12 @@ internal static class Fingerprint
         IReadOnlyList<AgentDeclaration> agents,
         IReadOnlyDictionary<string, ToolDeclaration> tools)
     {
+        // Binding must come from ToolBinding, NOT be re-derived here. The
+        // Register frame uses the same call, and a fingerprint that disagrees
+        // with the frame it summarises would let the hub short-circuit a
+        // registration whose content had in fact changed.
+        var bound = ToolBinding.Resolve(agents, tools);
+
         // ORDINAL, never the default comparer. Comparer<string>.Default is
         // CurrentCulture: it reorders keys differing by case, or by '_' against a
         // letter. node and python canonicalise this same structure, so a culture
@@ -80,6 +86,11 @@ internal static class Fingerprint
                 ["model_config"] = (object?)new SortedDictionary<string, object?>(StringComparer.Ordinal),
                 ["name"]         = !string.IsNullOrEmpty(a.Name) ? a.Name : a.Key,
                 ["status"]       = a.Status,
+                // Which tools this agent is BOUND to. Without it, re-pointing a
+                // tool at different agents leaves the fingerprint unchanged and
+                // the hub never reconciles the new binding. Safe to omit only
+                // while binding was derived from the tool key — it no longer is.
+                ["tools"]        = bound[a.Key].Select(t => (object?)t.Key).ToList(),
             })
             .ToList();
 

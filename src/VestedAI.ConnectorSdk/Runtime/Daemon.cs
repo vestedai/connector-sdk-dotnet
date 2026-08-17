@@ -231,6 +231,7 @@ internal sealed class Daemon
         var fp = Fingerprint.Compute(_app.Agents, _app.Tools);
 
         var reg = new Register { BaselineFingerprint = fp };
+        var bound = ToolBinding.Resolve(_app.Agents, _app.Tools);
 
         foreach (var agentDecl in _app.Agents)
         {
@@ -268,12 +269,11 @@ internal sealed class Daemon
                 });
             }
 
-            // Tools belonging to this agent (matched by namespace prefix).
-            var nsPrefix = agentDecl.Key + ".";
-            foreach (var (toolKey, toolDecl) in _app.Tools)
+            // Tools bound to this agent — by namespace prefix, or by the tool's
+            // own Agents list. ToolBinding is the single authority; the
+            // fingerprint reads the same resolution, so the two cannot drift.
+            foreach (var toolDecl in bound[agentDecl.Key])
             {
-                if (!toolKey.StartsWith(nsPrefix, StringComparison.Ordinal)) continue;
-
                 a.Tools.Add(ToProto(toolDecl));
             }
 

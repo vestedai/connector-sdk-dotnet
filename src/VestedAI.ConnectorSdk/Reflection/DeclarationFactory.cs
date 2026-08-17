@@ -392,6 +392,7 @@ public static class DeclarationFactory
             ArgsType        = argsType,
             ResultType      = resultType,
             IsPaginated     = paginated,
+            Agents          = toolAttr.Agents ?? Array.Empty<string>(),
         };
     }
 

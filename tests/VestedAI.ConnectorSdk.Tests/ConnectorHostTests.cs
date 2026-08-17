@@ -183,12 +183,35 @@ public class ConnectorHostTests
         // Its key is "k5.demo".  The tool key we pass will be "unrelated.ping".
         var agentList = new List<AgentDeclaration> { agentDecl };
 
-        // Fabricate a ToolDeclaration with a non-matching key by wrapping the real
-        // K5DemoPingTool declaration in a fresh dict with a renamed key.
+        // Fabricate a ToolDeclaration whose OWN Key does not match any agent.
+        //
+        // This used to rename only the dictionary key while leaving
+        // declaration.Key as "k5.demo.ping". That worked against the old
+        // validator, which read the dict key — but the dict is just an index:
+        // declaration.Key is what goes on the wire and into the fingerprint, and
+        // the two are never actually different, since the builder inserts by
+        // declaration.Key. ToolBinding reads declaration.Key, so the fixture has
+        // to make the declaration genuinely unrelated for the test to mean
+        // anything.
+        var badToolDecl = new ToolDeclaration
+        {
+            Key               = "unrelated.ping",
+            Name              = toolDecl.Name,
+            Description       = toolDecl.Description,
+            Sensitivity       = toolDecl.Sensitivity,
+            DefaultDeadlineMs = toolDecl.DefaultDeadlineMs,
+            MaxResultBytes    = toolDecl.MaxResultBytes,
+            InputSchemaJson   = toolDecl.InputSchemaJson,
+            OutputSchemaJson  = toolDecl.OutputSchemaJson,
+            HandlerType       = toolDecl.HandlerType,
+            ArgsType          = toolDecl.ArgsType,
+            ResultType        = toolDecl.ResultType,
+        };
+
         var badToolDict = new Dictionary<string, ToolDeclaration>(StringComparer.Ordinal)
         {
             // "unrelated.ping" does not start with "k5.demo."
-            ["unrelated.ping"] = toolDecl
+            ["unrelated.ping"] = badToolDecl
         };
 
         var ex = Assert.Throws<ConnectorException>(
