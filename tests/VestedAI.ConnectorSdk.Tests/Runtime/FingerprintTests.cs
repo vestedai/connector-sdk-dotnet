@@ -191,4 +191,48 @@ public class FingerprintTests
         Assert.Equal(64, fp.Length);
         Assert.NotEqual("", fp);
     }
+
+    // Ordinal puts uppercase first and '_' (0x5F) after letters. Culture-aware
+    // collation reorders both, and node/python canonicalise this same structure
+    // — so a culture sort makes the same declarations hash differently per SDK.
+    [Fact]
+    public void AgentsSortOrdinally_NotByCulture()
+    {
+        var agents = new[]
+        {
+            MakeAgent("erp.data"),
+            MakeAgent("erp.data_ops"),
+            MakeAgent("erp.dataX"),
+            MakeAgent("erp.Data"),
+        };
+        var tools = new Dictionary<string, ToolDeclaration>();
+
+        var json = Fingerprint.CanonicalJsonFor(agents, tools);
+
+        var order = new[] { "erp.Data", "erp.data", "erp.dataX", "erp.data_ops" };
+        var positions = order
+            .Select(k => json.IndexOf($"\"key\":\"{k}\"", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.DoesNotContain(-1, positions);
+        Assert.Equal(positions.OrderBy(p => p).ToList(), positions);
+    }
+
+    [Fact]
+    public void ToolsSortOrdinally_NotByCulture()
+    {
+        var agents = new[] { MakeAgent("erp.data") };
+        var tools = new[] { "erp.a_b", "erp.aX", "erp.Ab", "erp.ab" }
+            .ToDictionary(k => k, k => MakeTool(k));
+
+        var json = Fingerprint.CanonicalJsonFor(agents, tools);
+
+        var order = new[] { "erp.Ab", "erp.aX", "erp.a_b", "erp.ab" };
+        var positions = order
+            .Select(k => json.LastIndexOf($"\"key\":\"{k}\"", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.DoesNotContain(-1, positions);
+        Assert.Equal(positions.OrderBy(p => p).ToList(), positions);
+    }
 }

@@ -27,19 +27,34 @@ internal static class Fingerprint
         IReadOnlyList<AgentDeclaration> agents,
         IReadOnlyDictionary<string, ToolDeclaration> tools)
     {
-        var canonical = BuildCanonical(agents, tools);
-        var json = CanonicalJsonStringify(canonical);
+        var json = CanonicalJsonFor(agents, tools);
         var bytes = Encoding.UTF8.GetBytes(json);
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// The canonical JSON that <see cref="Compute"/> hashes. Exposed so tests can
+    /// assert ORDERING directly: a hash tells you only that something differs,
+    /// never what, and ordering is exactly what diverged between the SDKs.
+    /// </summary>
+    internal static string CanonicalJsonFor(
+        IReadOnlyList<AgentDeclaration> agents,
+        IReadOnlyDictionary<string, ToolDeclaration> tools)
+        => CanonicalJsonStringify(BuildCanonical(agents, tools));
+
     private static Dictionary<string, object?> BuildCanonical(
         IReadOnlyList<AgentDeclaration> agents,
         IReadOnlyDictionary<string, ToolDeclaration> tools)
     {
+        // ORDINAL, never the default comparer. Comparer<string>.Default is
+        // CurrentCulture: it reorders keys differing by case, or by '_' against a
+        // letter. node and python canonicalise this same structure, so a culture
+        // sort makes identical declarations hash differently per SDK — measured,
+        // two independent swaps on realistic agent keys. Lines further down
+        // already pass StringComparer.Ordinal; these two did not.
         var sortedAgents = agents
-            .OrderBy(a => a.Key)
+            .OrderBy(a => a.Key, StringComparer.Ordinal)
             .Select(a => (object?)new SortedDictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["description"] = a.Description,
@@ -62,7 +77,7 @@ internal static class Fingerprint
             .ToList();
 
         var sortedTools = tools
-            .OrderBy(kvp => kvp.Key)
+            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
             .Select(kvp =>
             {
                 var t = kvp.Value;
