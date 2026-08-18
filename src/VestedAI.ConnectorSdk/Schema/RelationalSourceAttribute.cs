@@ -108,6 +108,16 @@ public sealed class RelationalSourceAttribute : Attribute
     public string SqlArg { get; set; } = "";
 
     /// <summary>
+    /// Which argument of <see cref="QueryTool"/> carries bind parameters, as an
+    /// object of name to value. Empty = this source takes none.
+    /// </summary>
+    /// <remarks>
+    /// Values behind this argument are BOUND by the connector, never
+    /// interpolated into the SQL.
+    /// </remarks>
+    public string ParamsArg { get; set; } = "";
+
+    /// <summary>
     /// The databases (MySQL) or companies (Business Central) this source
     /// spans. Declared here, statically, because <c>Build()</c> must validate
     /// against it at BOOTSTRAP — before any extraction has happened and

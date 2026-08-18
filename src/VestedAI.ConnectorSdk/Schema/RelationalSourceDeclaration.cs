@@ -24,6 +24,12 @@ namespace VestedAI.ConnectorSdk.Schema;
 /// The annotated class. The SDK constructs it only when no ready-made instance
 /// was supplied to <c>UseRelationalSchemaProvider</c>.
 /// </param>
+/// <param name="ParamsArg">
+/// Which argument of <paramref name="QueryTool"/> carries bind parameters.
+/// Empty = this source takes none. Unlike <paramref name="SqlArg"/> this is
+/// OPTIONAL — defaulted here, and placed last, so existing positional
+/// construction does not shift.
+/// </param>
 public sealed record RelationalSourceDeclaration(
     string Engine,
     string DescribeTool,
@@ -31,4 +37,5 @@ public sealed record RelationalSourceDeclaration(
     string SqlArg,
     IReadOnlyList<string> Scopes,
     string DefaultScope,
-    Type ProviderType);
+    Type ProviderType,
+    string ParamsArg = "");

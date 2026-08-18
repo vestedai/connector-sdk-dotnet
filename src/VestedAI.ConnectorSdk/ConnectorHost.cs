@@ -414,6 +414,18 @@ public sealed class ConnectorHostBuilder
                 $"(its arguments are: {(argNames.Count == 0 ? "none" : string.Join(", ", argNames))}). " +
                 "The name must match the tool's input schema exactly, including case.");
         }
+
+        // Optional, unlike SqlArg above: validate ONLY when declared. An
+        // unconditional check here would refuse every existing connector, all
+        // of which declare no ParamsArg.
+        if (source.ParamsArg.Length != 0 && !argNames.Contains(source.ParamsArg, StringComparer.Ordinal))
+        {
+            throw new ConnectorException(
+                $"relational source declares ParamsArg '{source.ParamsArg}' but tool " +
+                $"'{source.QueryTool}' has no such argument " +
+                $"(its arguments are: {(argNames.Count == 0 ? "none" : string.Join(", ", argNames))}). " +
+                "The name must match the tool's input schema exactly, including case.");
+        }
     }
 
     private static string DescribeToolKeys(IReadOnlyDictionary<string, ToolDeclaration> tools)

@@ -1,5 +1,11 @@
 using Google.Protobuf;
 using Vested.V1;
+using VestedAI.ConnectorSdk;
+using VestedAI.ConnectorSdk.Errors;
+using VestedAI.ConnectorSdk.Runtime;
+using VestedAI.ConnectorSdk.Schema;
+using VestedAI.ConnectorSdk.Tests.Runtime;
+using VestedAI.ConnectorSdk.Tests.Schema;
 using Xunit;
 
 namespace VestedAI.ConnectorSdk.Tests;
@@ -83,5 +89,94 @@ public class RelationalSourceDeclTests
         Assert.Equal(original.QueryTool, parsed.QueryTool);
         Assert.Equal(original.SqlArg, parsed.SqlArg);
         Assert.Equal(original.Fingerprint, parsed.Fingerprint);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 5: ParamsArg (params_arg = 8, landed on the proto by Task 1).
+    //
+    // The two-hop .NET path — [RelationalSource] attribute →
+    // RelationalSourceDeclaration → Daemon.ToProtoAsync's RelationalSourceDecl
+    // — is the one place a declared value can be dropped silently: it compiles
+    // and the record carries the value, but nothing puts it on the wire. So
+    // these three go through Daemon.ToProtoAsync itself, not the bare proto
+    // class, unlike the round-trip tests above.
+    //
+    // Fixture provider for rs.demo.query_sql (declared in
+    // Schema/RelationalSourceDeclarationTests.cs, arguments "Sql" and "Scope").
+
+    private sealed class ParamsArgFixtureProvider : IRelationalSchemaProvider
+    {
+        public Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
+            => Task.FromResult(new CanonicalSchema(new List<CanonicalEntity>(), new List<CanonicalRelation>()));
+
+        public Task<string> CatalogFingerprintAsync(CancellationToken ct)
+            => Task.FromResult("");
+    }
+
+    [Fact]
+    public async Task ToProtoAsync_ParamsArgDeclared_ReachesTheWireDeclaration()
+    {
+        var decl = await Daemon.ToProtoAsync(
+            new RelationalSourceDeclaration(
+                "mysql", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                Array.Empty<string>(), "", typeof(ParamsArgFixtureProvider),
+                ParamsArg: "Params"),
+            new ParamsArgFixtureProvider(),
+            CancellationToken.None);
+
+        Assert.Equal("Params", decl.ParamsArg);
+    }
+
+    [Fact]
+    public async Task ToProtoAsync_ParamsArgOmitted_EmitsEmptyString()
+    {
+        // Legal, unlike an omitted SqlArg: a source that takes no bind
+        // parameters must still boot and still register.
+        var decl = await Daemon.ToProtoAsync(
+            new RelationalSourceDeclaration(
+                "mysql", "rs.demo.describe_schema", "rs.demo.query_sql", "Sql",
+                Array.Empty<string>(), "", typeof(ParamsArgFixtureProvider)),
+            new ParamsArgFixtureProvider(),
+            CancellationToken.None);
+
+        Assert.Equal("", decl.ParamsArg);
+    }
+
+    [RelationalSource(
+        Engine = "sqlserver",
+        DescribeTool = "rs.demo.describe_schema",
+        QueryTool = "rs.demo.query_sql",
+        SqlArg = "Sql",
+        ParamsArg = "Bogus")]
+    private sealed class FixtureUnknownParamsArg : FixtureProviderBase { }
+
+    [Fact]
+    public void Build_ParamsArgIsNotAnArgumentOfTheQueryTool_Throws()
+    {
+        // ParamsArg fails differently from SqlArg but just as quietly: name it
+        // wrong and the connector never receives the parameters, so a filter
+        // silently does not apply and a dashboard shows unfiltered numbers
+        // that look plausible. Same fix as SqlArg — refuse at bootstrap.
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorHost.CreateBuilder()
+                .ScanAssembly(new FakeAssembly(
+                    typeof(RelationalDemoAgent),
+                    typeof(RelationalDescribeTool),
+                    typeof(RelationalQueryTool),
+                    typeof(FixtureUnknownParamsArg)))
+                .Build());
+
+        Assert.Contains("ParamsArg 'Bogus'", ex.Message);
+        Assert.Contains("rs.demo.query_sql", ex.Message);
+        Assert.Contains("including case", ex.Message);
+
+        Assert.Contains("arguments are: ", ex.Message);
+        var listed = ex.Message[(ex.Message.IndexOf("arguments are: ", StringComparison.Ordinal)
+                                 + "arguments are: ".Length)..];
+        Assert.Contains("Sql", listed);
+        Assert.Contains("Scope", listed);
     }
 }

@@ -274,7 +274,11 @@ public static class DeclarationFactory
             // compile-time constants, so unlike PHP this cannot drift per
             // environment — it is parity, not a fix.
             DefaultScope: scopes.Length == 1 ? scopes[0] : sourceAttr.DefaultScope,
-            ProviderType: t);
+            ProviderType: t,
+            // Optional, unlike the RequireValue calls above: no such call here.
+            // Requiring it would refuse every existing connector, all of which
+            // declare no ParamsArg.
+            ParamsArg: sourceAttr.ParamsArg);
     }
 
     private static void RequireValue(Type t, string field, string value, string what)

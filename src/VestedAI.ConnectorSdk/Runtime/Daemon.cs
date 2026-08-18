@@ -336,6 +336,7 @@ internal sealed class Daemon
             DescribeTool = d.DescribeTool,
             QueryTool    = d.QueryTool,
             SqlArg       = d.SqlArg,
+            ParamsArg    = d.ParamsArg,
             // proto3 would default this to "" anyway. Stated because the empty
             // string is not an unset field here, it is the failure contract:
             // everything below either overwrites it or deliberately leaves it.
