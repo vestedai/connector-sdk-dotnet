@@ -67,10 +67,10 @@ The following are PHP-, Python-, or Node-specific implementation details. They a
 
 ### v0.9.0 — the core's SQL gate resolution is exposed on `ToolContext` — ADDITIVE
 
-The core's SQL gate resolves the tables a governed `run_sql` call actually
-touches before letting it through. `ToolContext` now carries that resolution
-so a connector handler (erp_bc is the live one) can apply its OWN permission
-layer on top:
+The core's SQL gate resolves the tables it is willing to vouch for on a
+governed `run_sql` call before letting it through. `ToolContext` now carries
+that resolution so a connector handler (erp_bc is the live one) can apply its
+OWN permission layer on top:
 
 ```csharp
 public SchemaContext? SchemaContext { get; init; }
@@ -79,7 +79,9 @@ public SchemaContext? SchemaContext { get; init; }
 `SchemaContext` (`Tables`, `HasStar`, `GateMode`) and `SchemaContextTable`
 (`LogicalName`, `Scope`, `Kind`, `Physical`) are new sealed records under
 `VestedAI.ConnectorSdk.Tool`. Source: `ToolCallRequest.schema_context` (proto
-field 16), mapped in `Dispatcher.BuildContext`.
+field 16), mapped in `Dispatcher.BuildContext`. See that type's own XML doc
+remarks for the full, current contract — corrected 2026-08-18 in the final
+whole-branch review; this section is a summary, not the source of truth.
 
 **Ignoring it is safe.** A handler that never reads `ctx.SchemaContext`
 behaves exactly as before — nothing else on `ToolContext` changed shape, and
@@ -87,12 +89,26 @@ no existing constructor call (positional or named) needs updating.
 
 ⚠ **Null is NOT an empty table list.** `ctx.SchemaContext == null` means the
 core sent nothing: this connector declares no relational source, its gate
-mode is `off`, or this is not the governed query tool — it never means "no
+mode is `off`, this is not the governed query tool, or (added 2026-08-18) the
+gate's own refusal reason was `parse_failed` or `lookup_failed` — the gate
+never got to read the statement at all in either case. It never means "no
 tables were touched". A present `SchemaContext` with an empty `Tables` list is
-a different claim: the gate decided and resolved nothing. A handler that
-conflates the two ends up approving everything a `null` reaches. The message
-is advisory and one-way — the core has already decided; a handler's own
-refusal never reaches back to it.
+a different claim: the gate genuinely decided and resolved nothing (e.g. a
+catalog-only read). A handler that conflates the two ends up approving
+everything a `null` reaches. The message is advisory and one-way — the core
+has already decided; a handler's own refusal never reaches back to it.
+
+⚠ **`GateMode` cannot tell you whether THIS call was refused.** It names
+which mode the connector's gate is configured in, and reads exactly
+`"observe"` on a genuine allow AND on a refusal the call is proceeding through
+alike — nothing on `SchemaContext` distinguishes the two.
+
+⚠ **In `"observe"`, `Tables` is not the complete set of objects the statement
+touches.** A table the core's per-entity check refused is excluded from this
+list, but in `observe` the call proceeds and reads it anyway — so a statement
+joining a denied table alongside granted ones arrives with `Tables` missing
+exactly the table the core flagged. The `foreach` below is therefore checking
+"every object the core vouches for," not "every object this statement reads".
 
 **To adopt it**, read `ctx.SchemaContext` in a tool handler and apply your own
 permission check against `Tables[i].Physical`:
