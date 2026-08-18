@@ -106,7 +106,11 @@ internal sealed class Daemon
                 $"max_concurrent={ack.MaxConcurrentToolCalls}");
 
             // 3. Register
-            var registerMsg = await BuildRegisterAsync(ct).ConfigureAwait(false);
+            //
+            // The limit reaches the frame builder from HelloAck, which is the
+            // earliest it is knowable: it is per-connector and the hub sends it
+            // only after the worker dials. Build() cannot check it.
+            var registerMsg = await BuildRegisterAsync(ct, ack.MaxToolsPerAgent).ConfigureAwait(false);
             await _client.SendAsync(registerMsg).ConfigureAwait(false);
 
             // 4. RegisterAck
@@ -223,7 +227,7 @@ internal sealed class Daemon
     /// source's catalog fingerprint is read LIVE from the provider here — never
     /// captured at scan time, where it would be stale by the time it is sent.
     /// </summary>
-    private async Task<ConnectorMsg> BuildRegisterAsync(CancellationToken ct)
+    private async Task<ConnectorMsg> BuildRegisterAsync(CancellationToken ct, uint maxToolsPerAgent = 0)
     {
         // CRITICAL: baseline_fingerprint MUST be non-empty — the hub's in-memory
         // store starts at "" so an empty fingerprint short-circuits "accepted"
@@ -232,6 +236,12 @@ internal sealed class Daemon
 
         var reg = new Register { BaselineFingerprint = fp };
         var bound = ToolBinding.Resolve(_app.Agents, _app.Tools);
+
+        // Refuse a frame the hub would reject anyway, but name the agent rather
+        // than leave the developer mapping `agents[5].tools` back from an index
+        // — and fail here rather than let a rejected Register strand the hub
+        // with no declaration, which silently disables BOTH gates.
+        ToolBinding.ValidateHubLimits(bound, maxToolsPerAgent);
 
         foreach (var agentDecl in _app.Agents)
         {

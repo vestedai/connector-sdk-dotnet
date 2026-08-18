@@ -150,4 +150,85 @@ public class ToolBindingTests
 
         Assert.Contains("erp.shared.orphan", ex.Message);
     }
+
+    // ───────────────── HUB LIMITS: max_tools_per_agent ─────────────────
+    //
+    // Learned the hard way on 2026-08-18. `Agents = ["*"]` on erp_bc's run_sql
+    // pushed ONE agent from 30 tools to 31, one over that connector's limit, so
+    // the hub rejected the whole Register. With no accepted Register the hub
+    // holds no declaration for the connector, which makes BOTH the schema gate
+    // and the credential gate refuse — 528 lookup_failed and 284
+    // credential_refused over roughly an hour, reported as "try again shortly",
+    // advice that could never work.
+    //
+    // The hub names the offender as `agents[5].tools` — an index into the wire
+    // frame, which a developer then has to map back to an agent. These name it.
+
+    [Fact]
+    public void HubLimits_UnderTheLimit_DoesNotThrow()
+    {
+        var agents = new[] { Agent("erp.data") };
+        var tools = Map(Tool("erp.data.a"), Tool("erp.data.b"));
+
+        ToolBinding.ValidateHubLimits(ToolBinding.Resolve(agents, tools), maxToolsPerAgent: 3);
+    }
+
+    [Fact]
+    public void HubLimits_ExactlyAtTheLimit_DoesNotThrow()
+    {
+        // The hub refuses 31 against a limit of 30, so 30 itself is allowed.
+        // Off-by-one here would ground a connector the hub accepts.
+        var agents = new[] { Agent("erp.data") };
+        var tools = Map(Tool("erp.data.a"), Tool("erp.data.b"), Tool("erp.data.c"));
+
+        ToolBinding.ValidateHubLimits(ToolBinding.Resolve(agents, tools), maxToolsPerAgent: 3);
+    }
+
+    [Fact]
+    public void HubLimits_OverTheLimit_ThrowsNamingTheAgentAndCounts()
+    {
+        var agents = new[] { Agent("erp.data"), Agent("erp.retail") };
+        var tools = Map(
+            Tool("erp.data.a"), Tool("erp.data.b"), Tool("erp.data.c"),
+            Tool("erp.retail.x"));
+
+        var ex = Assert.Throws<ConnectorException>(() => ToolBinding.ValidateHubLimits(
+            ToolBinding.Resolve(agents, tools), maxToolsPerAgent: 2));
+
+        // The agent by NAME, not an index, and both numbers.
+        Assert.Contains("erp.data", ex.Message);
+        Assert.Contains("3", ex.Message);
+        Assert.Contains("2", ex.Message);
+    }
+
+    [Fact]
+    public void HubLimits_NamesTheSharedToolWhenOneContributed()
+    {
+        // "*" is the declaration most likely to breach this, because it adds a
+        // tool to EVERY agent including the fullest one. Saying so turns a
+        // puzzling count into an obvious cause.
+        var agents = new[] { Agent("erp.data"), Agent("erp.retail") };
+        var tools = Map(
+            Tool("erp.retail.a"), Tool("erp.retail.b"),
+            Tool("erp.shared.run_sql", "*"));
+
+        var ex = Assert.Throws<ConnectorException>(() => ToolBinding.ValidateHubLimits(
+            ToolBinding.Resolve(agents, tools), maxToolsPerAgent: 2));
+
+        Assert.Contains("erp.retail", ex.Message);
+        Assert.Contains("erp.shared.run_sql", ex.Message);
+    }
+
+    [Fact]
+    public void HubLimits_ZeroMeansUnknown_DoesNotThrow()
+    {
+        // proto3 uint32 defaults to 0, and an older hub sends no value at all.
+        // Reading that as "the limit is zero" would ground every connector
+        // against a hub that never set it — the failure mode this check exists
+        // to prevent, inverted.
+        var agents = new[] { Agent("erp.data") };
+        var tools = Map(Tool("erp.data.a"), Tool("erp.data.b"));
+
+        ToolBinding.ValidateHubLimits(ToolBinding.Resolve(agents, tools), maxToolsPerAgent: 0);
+    }
 }

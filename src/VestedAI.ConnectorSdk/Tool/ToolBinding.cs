@@ -157,4 +157,71 @@ public static class ToolBinding
             }
         }
     }
+
+    /// <summary>
+    /// Refuses a binding the hub would reject for exceeding
+    /// <c>max_tools_per_agent</c>, naming the agent.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// NOT callable from <c>Build()</c>, and that is not an oversight: the
+    /// limit is per-connector and arrives in <c>HelloAck</c> (proto field 5),
+    /// which the hub sends only after the worker dials it. So this runs at the
+    /// one point where the limit is known and the frame is not yet sent —
+    /// between HelloAck and Register.
+    /// </para>
+    /// <para>
+    /// WHY IT IS WORTH CHECKING AT ALL, given the hub rejects anyway: a
+    /// rejected Register leaves the hub holding a stream with NO declaration
+    /// for the connector, and both the schema gate and the credential gate then
+    /// refuse every call — reported as <c>lookup_failed</c>, whose message is
+    /// "try again shortly", advice that can never work when the cause is a
+    /// permanent validation failure. Measured on erp_bc 2026-08-18: one agent
+    /// went from 30 tools to 31 when a shared tool was bound with "*", and that
+    /// single tool cost ~1 hour of refusals across BOTH gates.
+    /// </para>
+    /// <para>
+    /// The hub reports the offender as <c>agents[5].tools</c> — an index into
+    /// the wire frame. This names the agent, and names the shared tools when
+    /// any contributed, because "*" is the declaration most likely to breach a
+    /// limit: it adds a tool to EVERY agent, including the fullest one.
+    /// </para>
+    /// </remarks>
+    /// <param name="maxToolsPerAgent">
+    /// From <c>HelloAck.MaxToolsPerAgent</c>. ZERO MEANS UNKNOWN and is
+    /// skipped: proto3 defaults a uint32 to 0 and an older hub sends no value,
+    /// so treating 0 as a real ceiling would ground every connector against a
+    /// hub that never set one — this check's own failure mode, inverted.
+    /// </param>
+    /// <exception cref="ConnectorException">An agent exceeds the limit.</exception>
+    public static void ValidateHubLimits(
+        SortedDictionary<string, List<ToolDeclaration>> bound,
+        uint maxToolsPerAgent)
+    {
+        if (maxToolsPerAgent == 0) return;
+
+        foreach (var (agentKey, tools) in bound)
+        {
+            if (tools.Count <= maxToolsPerAgent) continue;
+
+            var shared = tools
+                .Where(t => t.Agents.Count > 0)
+                .Select(t => t.Key)
+                .OrderBy(k => k, StringComparer.Ordinal)
+                .ToList();
+
+            var because = shared.Count > 0
+                ? " Bound across agents by their own declaration: "
+                  + string.Join(", ", shared)
+                  + ". A tool bound with \"*\" lands on every agent, including this one."
+                : "";
+
+            throw new ConnectorException(
+                "Agent \"" + agentKey + "\" would declare " + tools.Count
+                + " tools; this connector's hub limit is " + maxToolsPerAgent
+                + ". The hub would refuse the whole Register, leaving it with no declaration for "
+                + "this connector — which makes both the schema gate and the credential gate refuse "
+                + "every call." + because);
+        }
+    }
 }
