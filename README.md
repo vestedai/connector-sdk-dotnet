@@ -13,7 +13,7 @@ Connect any .NET service to the Vested AI platform. The SDK opens a long-lived g
 dotnet add package VestedAI.ConnectorSdk
 ```
 
-Requires .NET 8 (LTS). Or run the Docker image: `vestedai/vested-ai-connector-sdk-dotnet:0.7.0` (also `:latest`, multi-arch amd64/arm64).
+Requires .NET 8 (LTS). Or run the Docker image: `vestedai/vested-ai-connector-sdk-dotnet:0.10.0` (also `:latest`, multi-arch amd64/arm64).
 
 ## Connector Snippet
 
