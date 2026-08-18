@@ -88,13 +88,25 @@ own driver alongside the (separately-held) SQL text — nothing in this class
 ever accepts, sees, or returns a SQL string, so there is no method anywhere
 in the SDK that could take an already-interpolated statement.
 
+**The real production input shape is `JsonElement`, not a bare CLR type.** A
+tool's args POCO typically declares its params argument as
+`Dictionary<string, object?>`; `ArgsValidation.Parse` deserializes that with
+plain `JsonSerializer` and no custom converter, so every value materialises
+as a boxed `JsonElement` — never a bare `string`/`long`/`bool`. `Normalise`
+classifies `JsonElement` by `ValueKind` as its primary path, and keeps full
+support for concrete CLR values (a caller that builds the dictionary itself —
+tests, hand-rolled tools) as a second path.
+
 **What `Normalise` does with each value:**
 
-| Input value | Result |
-|---|---|
-| Scalar (string, number, bool, date/time, `Guid`, `byte[]`, `null`) | Passed through **unchanged** — not copied, escaped, or reinterpreted. |
-| `IEnumerable` (a list, an array, a set) | Becomes **ONE** JSON-string parameter via `ToJsonArray` — e.g. `["A","B"]` — never expanded into `locs0`, `locs1`, ... placeholders and never written into SQL text. |
-| Anything else (a nested object, a dictionary, a POCO) | **Refused** — throws `ArgumentException` naming the parameter, rather than silently substituting something. |
+| `JsonElement.ValueKind` | Result | Concrete CLR equivalent | Result |
+|---|---|---|---|
+| `String` | The decoded string | `string` | Passed through **unchanged** — not copied, escaped, or reinterpreted |
+| `Number` | `long` when the literal fits one, else `double` | any numeric type, `DateTime`/`DateTimeOffset`, `Guid`, `byte[]`, etc. | Passed through **unchanged** |
+| `True` / `False` | `bool` | `bool` | Passed through **unchanged** |
+| `Null` | `null` | `null` | `null` |
+| `Array` | Becomes **ONE** JSON-string parameter via `ToJsonArray` — e.g. `["A","B"]` | `IEnumerable` (a list, an array, a set) | Same: **ONE** JSON-string parameter, never expanded into `locs0`, `locs1`, ... placeholders and never written into SQL text |
+| `Object` | **Refused** — throws `ArgumentException` naming the parameter | a nested object, a dictionary, a POCO | **Refused**, same way |
 
 ⚠ **A value that reaches SQL text — even quoted — is exactly what this class
 exists to make unnecessary.** A string containing a quote, a semicolon, or a
@@ -125,6 +137,19 @@ WHERE [Region] IN (SELECT [value] FROM OPENJSON(@locations))
 **Ignoring it is safe.** A tool that declares no `ParamsArg`, or a handler
 that never calls `Normalise`, is unaffected — nothing about existing
 `PaginatedToolHandler` or `RelationalSourceAttribute` behaviour changed.
+
+### v0.10.0 — `SdkInfo.Version` was three releases stale — fixed
+
+`Runtime/Daemon.cs` sends `SdkInfo.Version` to the hub as `SdkVersion` on
+every `Hello`. The constant was a hand-maintained literal that nobody updated
+across the 0.8.0 and 0.9.0 bumps — it still read `"0.7.0"` going into this
+release — so the hub's record of which SDK version each connector runs was
+silently wrong for two releases. Fixed to `"0.10.0"`, and pinned:
+`SdkInfoTests.SdkInfoVersion_MatchesTheAssemblyInformationalVersion` compares
+it against the assembly's own `AssemblyInformationalVersionAttribute` (which
+the csproj `<Version>` flows into at build time), so this cannot drift
+silently again — a future version bump that misses this constant now fails
+the test suite instead of shipping a stale value to the hub.
 
 Intended git tag: `v0.10.0` (on the public mirror repo).
 
