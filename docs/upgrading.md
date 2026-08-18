@@ -63,6 +63,59 @@ The following are PHP-, Python-, or Node-specific implementation details. They a
 
 ---
 
+## v0.9.0 Release Notes
+
+### v0.9.0 — the core's SQL gate resolution is exposed on `ToolContext` — ADDITIVE
+
+The core's SQL gate resolves the tables a governed `run_sql` call actually
+touches before letting it through. `ToolContext` now carries that resolution
+so a connector handler (erp_bc is the live one) can apply its OWN permission
+layer on top:
+
+```csharp
+public SchemaContext? SchemaContext { get; init; }
+```
+
+`SchemaContext` (`Tables`, `HasStar`, `GateMode`) and `SchemaContextTable`
+(`LogicalName`, `Scope`, `Kind`, `Physical`) are new sealed records under
+`VestedAI.ConnectorSdk.Tool`. Source: `ToolCallRequest.schema_context` (proto
+field 16), mapped in `Dispatcher.BuildContext`.
+
+**Ignoring it is safe.** A handler that never reads `ctx.SchemaContext`
+behaves exactly as before — nothing else on `ToolContext` changed shape, and
+no existing constructor call (positional or named) needs updating.
+
+⚠ **Null is NOT an empty table list.** `ctx.SchemaContext == null` means the
+core sent nothing: this connector declares no relational source, its gate
+mode is `off`, or this is not the governed query tool — it never means "no
+tables were touched". A present `SchemaContext` with an empty `Tables` list is
+a different claim: the gate decided and resolved nothing. A handler that
+conflates the two ends up approving everything a `null` reaches. The message
+is advisory and one-way — the core has already decided; a handler's own
+refusal never reaches back to it.
+
+**To adopt it**, read `ctx.SchemaContext` in a tool handler and apply your own
+permission check against `Tables[i].Physical`:
+
+```csharp
+public override Task<Result> HandleAsync(Args args, ToolContext ctx)
+{
+    if (ctx.SchemaContext is { } schema)
+    {
+        foreach (var table in schema.Tables)
+        {
+            if (IsRestricted(table.Physical))
+                throw new ConnectorException("refused: restricted table");
+        }
+    }
+    // ...
+}
+```
+
+Intended git tag: `v0.9.0` (on the public mirror repo).
+
+---
+
 ## v0.8.0 Release Notes
 
 ### v0.8.0 — Business Central's system tables can be described — ADDITIVE

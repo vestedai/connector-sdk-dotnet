@@ -341,6 +341,87 @@ public class DispatcherTests
     }
 
     // -----------------------------------------------------------------------
+    // SchemaContext — null vs. present is the whole point (⚠ null is NOT an
+    // empty table list). These drive the REAL BuildContext mapping in
+    // Dispatcher, not a hand-constructed ToolContext.
+
+    [Fact]
+    public async Task SchemaContext_IsNull_WhenAbsentFromRequest()
+    {
+        var dict = new Dictionary<string, ToolDeclaration>(StringComparer.Ordinal);
+        var decl = DeclarationFactory.FromToolType(typeof(EchoContextTool));
+        dict[decl.Key] = decl;
+
+        var capture = new CapturingSend();
+        var dispatcher = new Dispatcher(dict, capture.SendAsync);
+        dispatcher.Dispatch(new ToolCallRequest
+        {
+            ToolKey        = "disp.echo_ctx",
+            InvocationId   = "sc-absent",
+            ArgsJson       = ByteString.CopyFrom(Encoding.UTF8.GetBytes("{}")),
+            OrganizationId = "1",
+            UserId         = "0",
+            // schema_context intentionally omitted.
+        });
+
+        await WaitForMessages(capture, count: 1);
+
+        var resp = capture.Captured.Single().ToolCallResponse;
+        Assert.Equal(ToolCallResponse.ResultOneofCase.ResultJson, resp.ResultCase);
+        using var doc = JsonDocument.Parse(resp.ResultJson.ToStringUtf8());
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("SchemaContext").ValueKind);
+    }
+
+    [Fact]
+    public async Task SchemaContext_SurfacesOnContext_WhenPresentInRequest()
+    {
+        var dict = new Dictionary<string, ToolDeclaration>(StringComparer.Ordinal);
+        var decl = DeclarationFactory.FromToolType(typeof(EchoContextTool));
+        dict[decl.Key] = decl;
+
+        var capture = new CapturingSend();
+        var dispatcher = new Dispatcher(dict, capture.SendAsync);
+        var req = new ToolCallRequest
+        {
+            ToolKey        = "disp.echo_ctx",
+            InvocationId   = "sc-present",
+            ArgsJson       = ByteString.CopyFrom(Encoding.UTF8.GetBytes("{}")),
+            OrganizationId = "1",
+            UserId         = "0",
+            SchemaContext = new Vested.V1.SchemaContext
+            {
+                HasStar  = true,
+                GateMode = "enforce",
+            },
+        };
+        req.SchemaContext.Tables.Add(new Vested.V1.SchemaContextTable
+        {
+            LogicalName = "Item Ledger Entry",
+            Scope       = "ASG",
+            Kind        = "table",
+        });
+        req.SchemaContext.Tables[0].Physical.Add("ASG$Item Ledger Entry$437dbf0e");
+        dispatcher.Dispatch(req);
+
+        await WaitForMessages(capture, count: 1);
+
+        var resp = capture.Captured.Single().ToolCallResponse;
+        Assert.Equal(ToolCallResponse.ResultOneofCase.ResultJson, resp.ResultCase);
+        using var doc = JsonDocument.Parse(resp.ResultJson.ToStringUtf8());
+        var sc = doc.RootElement.GetProperty("SchemaContext");
+        Assert.Equal(JsonValueKind.Object, sc.ValueKind);
+        Assert.True(sc.GetProperty("HasStar").GetBoolean());
+        Assert.Equal("enforce", sc.GetProperty("GateMode").GetString());
+        var tables = sc.GetProperty("Tables");
+        Assert.Equal(1, tables.GetArrayLength());
+        Assert.Equal("Item Ledger Entry", tables[0].GetProperty("LogicalName").GetString());
+        Assert.Equal("ASG", tables[0].GetProperty("Scope").GetString());
+        Assert.Equal("table", tables[0].GetProperty("Kind").GetString());
+        Assert.Equal("ASG$Item Ledger Entry$437dbf0e", tables[0].GetProperty("Physical")[0].GetString());
+    }
+
+    // -----------------------------------------------------------------------
     // Helper
 
     private static async Task WaitForMessages(CapturingSend capture, int count, int timeoutMs = 3000)
@@ -373,6 +454,10 @@ public class EchoContextTool : ToolHandler<EchoContextTool.Args, EchoContextTool
         public string EmployeeNo { get; set; } = "";
         public string ErpIdentifier { get; set; } = "";
         public string[] ErpDepartmentIdentifiers { get; set; } = Array.Empty<string>();
+        // Left null (not defaulted) so the serialized JSON distinguishes
+        // "the core sent none" from "the core sent an empty context" — the
+        // whole point of the field under test.
+        public VestedAI.ConnectorSdk.Tool.SchemaContext? SchemaContext { get; set; }
     }
 
     public override Task<CtxResult> HandleAsync(Args args, ToolContext ctx)
@@ -387,5 +472,6 @@ public class EchoContextTool : ToolHandler<EchoContextTool.Args, EchoContextTool
             EmployeeNo               = ctx.EmployeeNo,
             ErpIdentifier            = ctx.ErpIdentifier,
             ErpDepartmentIdentifiers = ctx.ErpDepartmentIdentifiers.ToArray(),
+            SchemaContext            = ctx.SchemaContext,
         });
 }

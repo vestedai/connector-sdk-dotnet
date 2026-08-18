@@ -40,6 +40,13 @@ public sealed record ToolContext(
     public IReadOnlyList<string> ErpDepartmentIdentifiers { get; init; } = Array.Empty<string>();
 
     /// <summary>
+    /// What the core's SQL gate resolved for this call, or null when it sent
+    /// none. ⚠ Null is NOT an empty table list — see <see cref="SchemaContext"/>.
+    /// Source: <c>ToolCallRequest.schema_context</c> (proto field 16).
+    /// </summary>
+    public SchemaContext? SchemaContext { get; init; }
+
+    /// <summary>
     /// Lazy access to the caller's sealed credential. Null for connectors that
     /// declare no credential schema.
     /// </summary>

@@ -139,6 +139,7 @@ internal sealed class Dispatcher
             EmployeeNo                = req.EmployeeNo ?? "",
             ErpIdentifier             = req.ErpIdentifier ?? "",
             ErpDepartmentIdentifiers  = req.ErpDepartmentIdentifiers.ToArray(),
+            SchemaContext             = ToSchemaContext(req.SchemaContext),
             // Lazy: most tools never read the credential, and one that doesn't
             // ask should neither pay for a decrypt nor fail because of one.
             Credentials = new VestedAI.ConnectorSdk.Credential.CredentialResolver(
@@ -147,6 +148,28 @@ internal sealed class Dispatcher
                 _connectorId,
                 req.UserId ?? ""),
         };
+    }
+
+    /// <summary>
+    /// Maps the wire message to the SDK's read-only record, mapping an ABSENT
+    /// proto message to null — never to a <see cref="Tool.SchemaContext"/> with
+    /// an empty table list. Protobuf3 singular message fields are already null
+    /// when unset on the wire, so this is a direct translation, not a guess.
+    /// </summary>
+    private static Tool.SchemaContext? ToSchemaContext(Vested.V1.SchemaContext? proto)
+    {
+        if (proto is null)
+        {
+            return null;
+        }
+
+        return new Tool.SchemaContext(
+            Tables: proto.Tables
+                .Select(t => new Tool.SchemaContextTable(
+                    t.LogicalName ?? "", t.Scope ?? "", t.Kind ?? "", t.Physical.ToArray()))
+                .ToArray(),
+            HasStar: proto.HasStar,
+            GateMode: proto.GateMode ?? "");
     }
 
     private Task ReplyOkAsync(string invocationId, byte[] resultJson)
