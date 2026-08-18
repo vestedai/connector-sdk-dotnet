@@ -355,7 +355,9 @@ public class SqlServerProviderTests
     {
         var scopes = await new SqlServerProvider(TwoVariantItem()).ScopesAsync(default);
 
-        Assert.Equal(new[] { "ASG", "ASG - HData" }, scopes);
+        // Companies come first and sorted; the system scope is appended
+        // because this fixture holds "Access Control", a company-less table.
+        Assert.Equal(new[] { "ASG", "ASG - HData", SqlServerProvider.SystemScopeKey }, scopes);
     }
 
     [Fact]
@@ -427,5 +429,91 @@ public class SqlServerProviderTests
         var reversedHash = await new SqlServerProvider(reversed).CatalogFingerprintAsync(default);
 
         Assert.Equal(forwardHash, reversedHash);
+    }
+
+    // ---------------------------------------------------------------------
+    // System scope. Business Central's own tables carry no company prefix, so
+    // before SystemScopeKey they matched no scope and were dropped from every
+    // describe — measured on the live catalog, 0 of 16,250 extracted variants
+    // lacked a prefix. With the core's SQL gate at `enforce` that made any
+    // query touching them refusable, with no scope an operator could name.
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task DescribesCompanylessSystemTablesUnderTheSystemScope()
+    {
+        var schema = await new SqlServerProvider(TwoVariantItem())
+            .DescribeAsync(SqlServerProvider.SystemScopeKey, default);
+
+        var acl = Assert.Single(schema.Entities, e => e.LogicalName == "Access Control");
+        Assert.Equal(SqlServerProvider.SystemScopeKey, acl.ScopeKey);
+
+        // The variant carries the table's LITERAL name: these are referenced
+        // unprefixed in SQL, so anything else would be unqueryable.
+        Assert.Equal("Access Control", Assert.Single(acl.Variants).PhysicalName);
+        Assert.Empty(acl.JoinKey);
+    }
+
+    [Fact]
+    public async Task SystemScopeExcludesBcStorageInternals()
+    {
+        var schema = await new SqlServerProvider(TwoVariantItem())
+            .DescribeAsync(SqlServerProvider.SystemScopeKey, default);
+
+        // $ndo$cachesync describes how the catalog is STORED, not anything a
+        // question can be asked about. It has no company prefix either, so
+        // without an explicit exclusion it would ride in on the same rule.
+        Assert.DoesNotContain(schema.Entities, e => e.LogicalName.StartsWith("$"));
+    }
+
+    [Fact]
+    public async Task SystemScopeAndCompanyScopesDoNotOverlap()
+    {
+        var provider = new SqlServerProvider(TwoVariantItem());
+
+        var system = await provider.DescribeAsync(SqlServerProvider.SystemScopeKey, default);
+        var company = await provider.DescribeAsync("ASG", default);
+
+        // A company table must never appear in the system scope...
+        Assert.DoesNotContain(system.Entities, e => e.LogicalName == "Item");
+        // ...and a system table must never appear in a company's.
+        Assert.DoesNotContain(company.Entities, e => e.LogicalName == "Access Control");
+    }
+
+    [Fact]
+    public async Task ScopesOffersTheSystemScopeOnlyWhenSuchTablesExist()
+    {
+        var withSystem = await new SqlServerProvider(TwoVariantItem()).ScopesAsync(default);
+        Assert.Contains(SqlServerProvider.SystemScopeKey, withSystem);
+
+        // A catalog of nothing but company tables must NOT advertise the
+        // scope: it would extract to an empty catalog, which the core's
+        // ingestor refuses rather than superseding a good snapshot with none.
+        var companiesOnly = new FakeCatalog();
+        companiesOnly.Tables.Add(new CatalogTable("dbo", ItemBase));
+        companiesOnly.Columns.Add(new CatalogColumn(ItemBase, "No.", "nvarchar", false, 1, true));
+
+        var scopes = await new SqlServerProvider(companiesOnly).ScopesAsync(default);
+        Assert.DoesNotContain(SqlServerProvider.SystemScopeKey, scopes);
+    }
+
+    [Fact]
+    public async Task ThrowsWhenARealCompanyCollidesWithTheSystemScopeKey()
+    {
+        // I first claimed this collision was IMPOSSIBLE — that BcPhysicalName's
+        // non-greedy company group could never span a `$`. It can: non-greedy
+        // stops at the FIRST position where the remainder matches, and if that
+        // requires crossing a `$` it will. A company named "$system" therefore
+        // parses out of "$system$Item$<app-id>". This test is what caught the
+        // wrong claim, so it pins the guard rather than the assumption.
+        var cat = new FakeCatalog();
+        var colliding = SqlServerProvider.SystemScopeKey + "$Item$437dbf0e-84ff-417a-965d-ed2bb9650972";
+        cat.Tables.Add(new CatalogTable("dbo", colliding));
+        cat.Columns.Add(new CatalogColumn(colliding, "No.", "nvarchar", false, 1, true));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new SqlServerProvider(cat).ScopesAsync(default));
+
+        Assert.Contains(SqlServerProvider.SystemScopeKey, ex.Message);
     }
 }

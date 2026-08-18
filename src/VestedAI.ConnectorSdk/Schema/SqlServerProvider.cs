@@ -17,7 +17,9 @@ namespace VestedAI.ConnectorSdk.Schema;
 ///                   QueryTool = "erp_bc.query_sql", SqlArg = "Sql")]
 /// public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
 /// </code>
-/// Every method here is non-virtual, so a subclass inherits the behaviour whole
+/// ScopesAsync and DescribeAsync are virtual so a connector can extend or
+/// replace scope handling without a fork; everything else is non-virtual, so a
+/// subclass inherits the behaviour whole
 /// and can change none of it — unsealing widens what can be declared, not what
 /// can be overridden.
 /// </remarks>
@@ -27,18 +29,80 @@ public class SqlServerProvider : IRelationalSchemaProvider
 
     public SqlServerProvider(ICatalogReader reader) => _reader = reader;
 
-    public async Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
+    /// <summary>
+    /// The scope key under which Business Central's own system tables are
+    /// described — the ones with NO company prefix (<c>User</c>,
+    /// <c>Object</c>, <c>Access Control</c> and about a hundred others).
+    /// </summary>
+    /// <remarks>
+    /// They belong to no company, so before this existed they matched no scope
+    /// and were dropped from every describe: measured on the live catalog,
+    /// 0 of 16,250 extracted variants lacked a company prefix. Once the core's
+    /// SQL gate moved to <c>enforce</c> that made any query touching them
+    /// refusable as an unknown table, with no scope an operator could name to
+    /// extract them.
+    ///
+    /// ⚠ The <c>$</c> makes a collision vanishingly unlikely but NOT
+    /// impossible, and the difference matters. <see cref="BcPhysicalName"/>'s
+    /// company group is non-greedy, which does not stop it expanding ACROSS a
+    /// <c>$</c> when that is the only way the rest matches — so a company
+    /// literally named <c>$system</c> would produce
+    /// <c>$system$Item$&lt;app-id&gt;</c> and parse with that company. Rather
+    /// than assume it cannot happen, <see cref="ScopesAsync"/> detects the
+    /// clash and throws, because silently merging a real company's tables into
+    /// the system scope would describe one company's data under a key that
+    /// claims to hold none.
+    /// </remarks>
+    public const string SystemScopeKey = "$system";
+
+    /// <summary>
+    /// Table names BC uses for its own storage internals, excluded from the
+    /// system scope: they describe how the catalog is stored rather than
+    /// anything a question could be asked about.
+    /// </summary>
+    private static bool IsBcInternal(string tableName) =>
+        tableName.StartsWith("$", StringComparison.Ordinal);
+
+    public virtual async Task<IReadOnlyList<string>> ScopesAsync(CancellationToken ct)
     {
         var tables = await _reader.TablesAsync(ct).ConfigureAwait(false);
 
-        return tables
+        var companies = tables
             .Select(t => BcPhysicalName.TryParse(t.Name, out var p) ? p.Company : null)
             .Where(c => c is not null)
             .Select(c => c!)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(c => c, StringComparer.Ordinal)
             .ToList();
+
+        // Only offered when the catalog actually holds such tables, so a
+        // source with none does not advertise an empty scope that would
+        // extract to nothing and be refused by the core's ingestor.
+        // Loud, not silent: see SystemScopeKey's remarks. A company that
+        // parses to the sentinel would otherwise have its tables described
+        // under a scope key that is supposed to hold company-less ones.
+        if (companies.Contains(SystemScopeKey, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"A Business Central company is named \"{SystemScopeKey}\", which collides with the " +
+                "scope key this SDK uses for company-less system tables. Rename the company, or " +
+                "override ScopesAsync/DescribeAsync in your provider to choose a different sentinel.");
+        }
+
+        if (tables.Any(t => IsSystemTable(t.Name)))
+        {
+            companies.Add(SystemScopeKey);
+        }
+
+        return companies;
     }
+
+    /// <summary>
+    /// A table that belongs to no company: it does not parse as
+    /// <c>Company$Logical$AppId</c> and is not one of BC's storage internals.
+    /// </summary>
+    private static bool IsSystemTable(string tableName) =>
+        !BcPhysicalName.TryParse(tableName, out _) && !IsBcInternal(tableName);
 
     /// <summary>
     /// A cheap hash of the source catalog's shape.
@@ -74,7 +138,7 @@ public class SqlServerProvider : IRelationalSchemaProvider
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(joined))).ToLowerInvariant();
     }
 
-    public async Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
+    public virtual async Task<CanonicalSchema> DescribeAsync(string scopeKey, CancellationToken ct)
     {
         var tables = await _reader.TablesAsync(ct).ConfigureAwait(false);
         var columns = await _reader.ColumnsAsync(ct).ConfigureAwait(false);
@@ -83,6 +147,11 @@ public class SqlServerProvider : IRelationalSchemaProvider
         var columnsByTable = columns
             .GroupBy(c => c.TableName, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        if (string.Equals(scopeKey, SystemScopeKey, StringComparison.Ordinal))
+        {
+            return DescribeSystemScope(tables, columnsByTable);
+        }
 
         // extension physical name → its base physical name, from BC's own
         // metadata when readable.
@@ -219,5 +288,64 @@ public class SqlServerProvider : IRelationalSchemaProvider
             .OrderByDescending(n => columnsByTable.TryGetValue(n, out var c) ? c.Count : 0)
             .ThenBy(n => n, StringComparer.Ordinal)
             .First();
+    }
+
+    /// <summary>
+    /// Describes Business Central's company-less system tables as one scope.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately simpler than the company path, because the shape is
+    /// simpler: a system table has no <c>Company$Logical$AppId</c> structure,
+    /// so there is no variant set to stitch, no extension to fold into a base,
+    /// and therefore no join key. Each table is one entity with one variant
+    /// carrying its literal name — which is exactly what a caller must write
+    /// in SQL, since these tables are referenced unprefixed.
+    ///
+    /// Relations are empty for the same reason: variant_join rows describe how
+    /// an entity's own physical tables stitch together, and here there is only
+    /// ever one.
+    /// </remarks>
+    private static CanonicalSchema DescribeSystemScope(
+        IReadOnlyList<CatalogTable> tables,
+        IReadOnlyDictionary<string, List<CatalogColumn>> columnsByTable)
+    {
+        var entities = new List<CanonicalEntity>();
+
+        foreach (var table in tables
+                     .Where(t => IsSystemTable(t.Name))
+                     .OrderBy(t => t.Name, StringComparer.Ordinal))
+        {
+            var variants = new List<CanonicalVariant>
+            {
+                new(table.Name, "base", 0),
+            };
+
+            var entityColumns = new List<CanonicalColumn>();
+            if (columnsByTable.TryGetValue(table.Name, out var cols))
+            {
+                foreach (var c in cols.OrderBy(c => c.OrdinalPosition))
+                {
+                    entityColumns.Add(new CanonicalColumn(
+                        Name: c.ColumnName,
+                        Type: c.DataType,
+                        Nullable: c.IsNullable,
+                        Position: c.OrdinalPosition,
+                        IsPk: c.IsPrimaryKey,
+                        Caption: null,
+                        VariantPhysicalName: table.Name));
+                }
+            }
+
+            entities.Add(new CanonicalEntity(
+                LogicalName: table.Name,
+                ScopeKey: SystemScopeKey,
+                Kind: "table",
+                Comment: null,
+                JoinKey: new List<string>(),
+                Variants: variants,
+                Columns: entityColumns));
+        }
+
+        return new CanonicalSchema(entities, new List<CanonicalRelation>());
     }
 }

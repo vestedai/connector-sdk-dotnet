@@ -63,6 +63,61 @@ The following are PHP-, Python-, or Node-specific implementation details. They a
 
 ---
 
+## v0.8.0 Release Notes
+
+### v0.8.0 — Business Central's system tables can be described — ADDITIVE
+
+`SqlServerProvider` dropped every table with no `<Company>$` prefix. That was
+deliberate and documented ("$ndo$ internals, Access Control and the other 105
+system tables ... drop out here") and invisible while the core's SQL gate ran in
+`observe`. With the gate at `enforce` it became a hole: measured on the live
+Al-Saif catalog, **0 of 16,250 extracted variants lacked a company prefix**, so
+any query touching `User`, `Object`, `Access Control` or a permission set was
+refusable as an unknown table — and no scope existed that an operator could pass
+to `schema:extract` to fix it.
+
+| Added | Meaning |
+|---|---|
+| `SqlServerProvider.SystemScopeKey` (`"$system"`) | The scope key those company-less tables are described under. |
+| `ScopesAsync` / `DescribeAsync` are now `virtual` | A connector can extend or replace scope handling without forking the class. |
+
+**Nothing changes for a connector that does not ask for it.** `DescribeAsync`
+behaves exactly as before for a company scope. The one visible difference is
+that `ScopesAsync` now appends `$system` — and ONLY when the catalog actually
+contains such tables, so a source with none does not advertise a scope that
+would extract to an empty catalog and be refused.
+
+Each system table becomes one entity with one variant carrying its LITERAL
+name, because that is what a caller must write: these tables are referenced
+unprefixed. There is no variant set to stitch, so no join key. BC's own storage
+internals (anything starting with `$`, e.g. `$ndo$cachesync`) stay excluded —
+they describe how the catalog is stored, not anything a question can be asked
+about.
+
+⚠ **`$system` is unlikely to collide with a real company, not impossible.**
+`BcPhysicalName`'s company group is non-greedy, which does not stop it spanning
+a `$` when that is the only way the remainder matches — a company named
+`$system` really would parse out of `$system$Item$<app-id>`. `ScopesAsync`
+therefore DETECTS that clash and throws, rather than silently describing one
+company's tables under a key that claims to hold none.
+
+**To adopt it** a connector bumps the package and adds the key to its
+`[RelationalSource]` attribute, e.g.:
+
+```csharp
+Scopes = new[] { "ASG", "ASG - KWT", "ASG - OM", "ASG - QAR", "ASG - UAE",
+                 SqlServerProvider.SystemScopeKey },
+```
+
+then the operator extracts it once:
+`php artisan schema:extract --connector=<id> --scope='$system'`. Declaring it
+without extracting leaves the core's declared-vs-extracted drift alarm firing,
+which is the intended signal that step two is outstanding.
+
+Intended git tag: `v0.8.0` (on the public mirror repo).
+
+---
+
 ## v0.7.0 Release Notes
 
 ### v0.7.0 — a tool can declare the agents it binds to
