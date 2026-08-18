@@ -63,6 +63,73 @@ The following are PHP-, Python-, or Node-specific implementation details. They a
 
 ---
 
+## v0.10.0 Release Notes
+
+### v0.10.0 — `ParameterizedSql.Normalise` binds SQL parameter values — ADDITIVE
+
+`[RelationalSource(ParamsArg = "...")]` (v0.9.0-line) declares WHICH argument
+of the query tool carries bind parameters; nothing yet turned a caller's
+values into something a driver could bind. `VestedAI.ConnectorSdk.Tool`
+gains one new static class:
+
+```csharp
+public static class ParameterizedSql
+{
+    public static IReadOnlyDictionary<string, object?> Normalise(IDictionary<string, object?>? parameters);
+    public static string ToJsonArray(IEnumerable<object?> values);
+}
+```
+
+This is a **static helper, not a base class**. Both live SQL tools already
+extend `PaginatedToolHandler<TArgs, TRow>`, and C# is single-inheritance, so
+no connector could extend a second base for this. A handler calls
+`ParameterizedSql.Normalise(args.Params)` inline and hands the result to its
+own driver alongside the (separately-held) SQL text — nothing in this class
+ever accepts, sees, or returns a SQL string, so there is no method anywhere
+in the SDK that could take an already-interpolated statement.
+
+**What `Normalise` does with each value:**
+
+| Input value | Result |
+|---|---|
+| Scalar (string, number, bool, date/time, `Guid`, `byte[]`, `null`) | Passed through **unchanged** — not copied, escaped, or reinterpreted. |
+| `IEnumerable` (a list, an array, a set) | Becomes **ONE** JSON-string parameter via `ToJsonArray` — e.g. `["A","B"]` — never expanded into `locs0`, `locs1`, ... placeholders and never written into SQL text. |
+| Anything else (a nested object, a dictionary, a POCO) | **Refused** — throws `ArgumentException` naming the parameter, rather than silently substituting something. |
+
+⚠ **A value that reaches SQL text — even quoted — is exactly what this class
+exists to make unnecessary.** A string containing a quote, a semicolon, or a
+literal `DROP TABLE` comes back from `Normalise` byte-identical; the driver's
+own parameter binding is what makes it safe, not this method. Do not
+"helpfully" strip or escape quoting before or after calling it — a value that
+reached the SQL text could widen a filter or UNION against another ALLOWED
+table, which the core's SQL gate would bound but not prevent.
+
+**To adopt it**, a handler backing a `[RelationalSource(ParamsArg = "...")]`
+tool normalises `args`'s params property and binds the result on its own
+`SqlCommand`/`SqlParameter` collection — one parameter per key, arrays
+included:
+
+```csharp
+var bound = ParameterizedSql.Normalise(args.Params);
+foreach (var (name, value) in bound)
+    command.Parameters.AddWithValue($"@{name}", value ?? DBNull.Value);
+```
+
+An array-valued parameter (`@locations` bound to `["A","B"]`) is read back on
+the SQL Server side with `OPENJSON`, not by rewriting the statement:
+
+```sql
+WHERE [Region] IN (SELECT [value] FROM OPENJSON(@locations))
+```
+
+**Ignoring it is safe.** A tool that declares no `ParamsArg`, or a handler
+that never calls `Normalise`, is unaffected — nothing about existing
+`PaginatedToolHandler` or `RelationalSourceAttribute` behaviour changed.
+
+Intended git tag: `v0.10.0` (on the public mirror repo).
+
+---
+
 ## v0.9.0 Release Notes
 
 ### v0.9.0 — the core's SQL gate resolution is exposed on `ToolContext` — ADDITIVE
