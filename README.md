@@ -143,7 +143,8 @@ using VestedAI.ConnectorSdk.Schema;
     Engine       = "sqlserver",
     DescribeTool = "erp_bc.data.describe_schema",  // a ROWSET tool you declare
     QueryTool    = "erp_bc.data.run_sql",          // the free-form SQL tool
-    SqlArg       = "Sql")]                         // its SQL argument, wire-exact
+    SqlArg       = "Sql",                          // its SQL argument, wire-exact
+    ParamsArg    = "Params")]                      // its bind-parameters argument, wire-exact (optional)
 public sealed class BcSchemaProvider(ICatalogReader reader) : SqlServerProvider(reader);
 ```
 
@@ -233,7 +234,7 @@ This differs from writing your own LLM client. The connector does not call the L
 
 ## License + Status
 
-MIT. Current release: **v0.7.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity, `[Credential]` and `[RelationalSource]` Register declarations, `[RelationalSource]` scopes/defaultScope with a bootstrap throw, `[Tool(Agents = ...)]` shared across agents). On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
+MIT. Current release: **v0.10.0** (.NET 8, C# attribute API, POCO + NJsonSchema args, connector-declared tool sensitivity, `[Credential]` and `[RelationalSource]` Register declarations, `[RelationalSource]` scopes/defaultScope with a bootstrap throw, `[Tool(Agents = ...)]` shared across agents, `[RelationalSource(ParamsArg = ...)]` bind parameters with the `ParameterizedSql` normaliser helper). On [NuGet](https://www.nuget.org/packages/VestedAI.ConnectorSdk) (`dotnet add package VestedAI.ConnectorSdk`) and [Docker Hub](https://hub.docker.com/r/vestedai/vested-ai-connector-sdk-dotnet).
 
 ## Other language SDKs
 
