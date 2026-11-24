@@ -32,17 +32,41 @@ internal sealed class GrpcClient : IAsyncDisposable
         _insecure = insecure;
     }
 
+    /// <summary>
+    /// Builds the channel options for both transports.
+    ///
+    /// HTTP/2 keepalive PINGs (30 s / 10 s) are the dead-peer detector:
+    /// without them a half-open socket — peer died without FIN/RST: relay
+    /// restart, WireGuard rekey, network partition — is invisible to
+    /// Grpc.Net.Client forever: writes keep buffering, ReceiveAsync never
+    /// settles, and the connector sits "unavailable" until its pod restarts.
+    /// (Same failure class the PHP SDK hit in 2026-11-24; the PHP side has
+    /// no transport-level equivalent and enforces liveness at the
+    /// application layer instead.) SocketsHttpHandler sends the PINGs on
+    /// the connection itself, so they fire with no in-flight call pending.
+    /// On a dead socket a PING times out and the stream errors, so the
+    /// supervisor redials.
+    /// </summary>
+    internal static GrpcChannelOptions BuildChannelOptions(bool insecure)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+        };
+        var options = new GrpcChannelOptions { HttpHandler = handler };
+        if (insecure)
+        {
+            // Required for plain-text HTTP/2 without TLS.
+            options.Credentials = ChannelCredentials.Insecure;
+        }
+        return options;
+    }
+
     /// <summary>Opens the channel and starts the bidi stream.</summary>
     public void Connect()
     {
-        var options = _insecure
-            ? new GrpcChannelOptions
-            {
-                // Required for plain-text HTTP/2 without TLS
-                Credentials = ChannelCredentials.Insecure,
-                HttpHandler = new HttpClientHandler(),
-            }
-            : new GrpcChannelOptions();
+        var options = BuildChannelOptions(_insecure);
 
         _channel = GrpcChannel.ForAddress(_address, options);
         var stub = new ConnectorHub.ConnectorHubClient(_channel);
